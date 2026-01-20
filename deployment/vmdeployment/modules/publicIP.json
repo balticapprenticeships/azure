@@ -1,0 +1,76 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "3.1.0.0",
+    "parameters": {
+        "location": {
+            "type": "string"
+        },
+        "vmName": {
+            "type": "string"
+        },
+        "vmCount": {
+            "type": "int"
+        },
+        "createdBy": {
+            "type": "string"
+        },
+        "deliveringCoachInitials": {
+            "type": "string"
+        },
+        "courseStartDate": {
+            "type": "string"
+        },
+        "resourceGroupCleanup": {
+            "type": "string"
+        }
+    },
+    "functions": [],
+    "variables": {
+        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachinitials')))]"
+    },
+    "resources": [
+        {
+            "name": "[concat(variables('vmNamePrefix'), copyIndex('publicIpNameLoop', 1), '-ip')]",
+            "type": "Microsoft.Network/publicIPAddresses",
+            "apiVersion": "2020-11-01",
+            "location": "[parameters('location')]",
+            "tags": {
+                "DisplayName": "Public IP Address",
+                "ResourceType": "PublicIPAddress",
+                "Dept": "[resourceGroup().tags['Dept']]",
+                "CreatedBy": "[parameters('createdBy')]",
+                "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
+                "Cleanup": "[parameters('resourceGroupCleanup')]"
+            },
+            "copy": {
+                "name": "publicIpNameLoop",
+                "count": "[parameters('vmCount')]"
+            },
+            "properties": {
+                "publicIPAddressVersion": "IPv4",
+                "publicIPAllocationMethod": "Static",
+                "dnsSettings": {
+                    "domainNameLabel": "[toLower(concat('baltic-', variables('vmNamePrefix'), copyIndex('publicIpNameLoop', 1)))]"
+                }
+            },
+            "sku": {
+                "name": "Standard"
+            }
+        }
+    ],
+    "outputs": {
+        "FQDN": {
+            "type": "array",
+            "copy": {
+                "count": "[parameters('vmCount')]",
+                "input": {
+                    "value": "[reference(resourceId('Microsoft.Network/publicIpAddresses', concat(variables('vmNamePrefix'), copyIndex(1), '-ip'))).dnsSettings.fqdn]"
+                }
+            }            
+        },
+        "publicIP": {
+            "type": "string",
+            "value": ""
+        }
+    }
+}
