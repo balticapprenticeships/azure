@@ -355,7 +355,7 @@
         "vaultResourceGroup": "[concat(variables('rwkeyVault')[parameters('routeway')].keyVaultRg, 'OMSRg')]",
         "vaultName": "[concat('VMDeployment', variables('rwkeyVault')[parameters('routeway')].rwSuffix)]",
         "_artifactsLocation": "https://raw.githubusercontent.com/balticapprenticeships/azure",
-        "_moduleRepo": "/main/development/vmdeployment/modules"        
+        "_moduleRepo": "/main/deployment/vmdeployment/modules"        
     },
     "resources": [
         {

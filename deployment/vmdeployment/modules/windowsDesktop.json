@@ -145,8 +145,8 @@
         "hibernation": {
             "hibernationEnabled": true
         },
-        "_dscArtifactsLocation": "https://raw.githubusercontent.com/balticapprenticeships/azuredeployment",
-        "_dscExtensionRepo": "main/extensions",
+        "_dscArtifactsLocation": "https://raw.githubusercontent.com/balticapprenticeships/azure/",
+        "_dscExtensionRepo": "main/deployment/vmextensions",
         "dscArchiveFolder": "DSC",
         "dscArchiveFileName": "BaLabWinDesktopCfg.zip"
     },
