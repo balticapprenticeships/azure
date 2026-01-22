@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.0.0",
+    "contentVersion": "4.0.0.1",
     "parameters": {
         "location": {
             "type": "string"
@@ -95,16 +95,16 @@
         "WindowsLicense": "Windows_Server",
         "operatingSystemValues": {
             "ICTSupC2": {
-                "galleryImageDefinitionName": "BA-ICTSupMstr"
+                "galleryImageDefinitionName": "BA-ICTSupMstr-v2"
             },           
             "ICTSupC3": {
-                "galleryImageDefinitionName": "BA-ICTSupMstr"
+                "galleryImageDefinitionName": "BA-ICTSupMstr-v2"
             },
             "ICTSupC4": {
-                "galleryImageDefinitionName": "BA-ICTSupMstr"
+                "galleryImageDefinitionName": "BA-ICTSupMstr-v2"
             },
             "ICTSupC6": {
-                "galleryImageDefinitionName": "BA-ICTSupMstr"
+                "galleryImageDefinitionName": "BA-ICTSupMstr-v2"
             },
             "L4NetEngC4": {
                 "galleryImageDefinitionName": "BA-L4NetEngCourse4"
