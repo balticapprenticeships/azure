@@ -13,8 +13,17 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 # Windows Server User Interface
 
+## [4.0.0.0] 22.1.2026
+[serverMain]
+### Change
+  Updated contentVersion for windowsServer module to 4.0.0.1
+
 # Windows Client User Interface
 
 # Modules
 
-
+## [4.0.0.0] 22.1.2026
+[windowsServer]
+### Change
+  changed image version ICTSupMstr to ICTSupMstr-v2
+  Updated to 4.0.0.1
