@@ -13,14 +13,48 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 # Windows Server User Interface
 
+## [4.0.1.0] 3.2.2026
+[serverMain]
+### Change
+  Updated contentVersion for windowsServer module to 4.0.1.0
+
 ## [4.0.0.0] 22.1.2026
 [serverMain]
 ### Change
   Updated contentVersion for windowsServer module to 4.0.0.1
 
+# Windows Desktop Main
+
+## [4.0.1.0] 3.2.2026
+[desktopMain]
+### Change
+  added VM size B2ms and D4as
+  Updated contentVersion to 4.0.1.0
+
 # Windows Client User Interface
 
+## [4.0.1.0] 3.2.2026
+[uiWcDefinition]
+### Change
+  added VM size B2ms and D4as
+  Updated contentVersion to 4.0.1.0
+  
+
 # Modules
+
+## [4.0.1.0] 3.2.2026
+[windowsDesktop]
+### Change
+  added VM size B2ms and D4as
+  Updated contentVersion to 4.0.1.0
+
+## [4.0.1.0] 3.2.2026
+[windowsServer]
+### Change
+  changed image version ICTL3NetEngCourse4 to ICTL3NetEngC4
+  changed image version ICTL3NetEngCourse5 to ICTL3NetEngC5
+  changed image version ICTL3NetEngCourse7 to ICTL3NetEngC7
+  Updated contentVersion to 4.0.1.0
 
 ## [4.0.0.0] 22.1.2026
 [windowsServer]
