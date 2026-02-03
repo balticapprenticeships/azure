@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.0.1",
+    "contentVersion": "4.0.1.0",
     "parameters": {
         "location": {
             "type": "string"
@@ -107,13 +107,13 @@
                 "galleryImageDefinitionName": "BA-ICTSupMstr-v2"
             },
             "L4NetEngC4": {
-                "galleryImageDefinitionName": "BA-L4NetEngCourse4"
+                "galleryImageDefinitionName": "BA-L4NetEngC4"
             },
             "L4NetEngC5": {
-                "galleryImageDefinitionName": "BA-L4NetEngCourse5"
+                "galleryImageDefinitionName": "BA-L4NetEngC5"
             },
             "L4NetEngC7": {
-                "galleryImageDefinitionName": "BA-L4NetEngCourse7"
+                "galleryImageDefinitionName": "BA-L4NetEngC7"
             },
             "ItBootcamp": {
                 "galleryImageDefinitionName": "BA-Bootcamp"
