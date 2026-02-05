@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.1.0",
+    "contentVersion": "4.0.1.1",
     "parameters": {
         "location": {
             "type": "string",
@@ -23,7 +23,7 @@
                 "Standard_D2s_v3",
                 "Standard_D4s_v3",
                 "Standard_D2s_v5",
-                "Standard_D4s_v5",
+                "Standard_D4as_v5",
                 "Standard_D2as_v5"
             ],
             "metadata": {
