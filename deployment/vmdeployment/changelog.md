@@ -13,6 +13,20 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 # Windows Server User Interface
 
+## [4.0.0.1] 5.2.2026
+[uiSvrDefinition]
+### Change
+  corrected VM size version Dsv5 to Dasv5
+  Updated contentVersion to 4.0.0.1
+
+# Windows Server Main
+
+## [4.0.1.1] 5.2.2026
+[serverMain]
+### Change
+  corrected VM size version Dsv5 to Dasv5
+  Updated contentVersion for windowsServer module to 4.0.1.1
+
 ## [4.0.1.0] 3.2.2026
 [serverMain]
 ### Change
@@ -23,13 +37,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ### Change
   Updated contentVersion for windowsServer module to 4.0.0.1
 
-# Windows Desktop Main
 
-## [4.0.1.0] 3.2.2026
-[desktopMain]
-### Change
-  added VM size B2ms and D4as
-  Updated contentVersion to 4.0.1.0
 
 # Windows Client User Interface
 
@@ -38,7 +46,14 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ### Change
   added VM size B2ms and D4as
   Updated contentVersion to 4.0.1.0
-  
+
+# Windows Desktop Main
+
+## [4.0.1.0] 3.2.2026
+[desktopMain]
+### Change
+  added VM size B2ms and D4as
+  Updated contentVersion to 4.0.1.0  
 
 # Modules
 
