@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 # Windows Desktop Main
 
+## [4.0.2.0] 5.3.2026
+[desktopMain]
+### Change
+ added PostgresPassword
+
 ## [4.0.1.0] 3.2.2026
 [desktopMain]
 ### Change
@@ -56,6 +61,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   Updated contentVersion to 4.0.1.0  
 
 # Modules
+
+## [4.0.2.0] 5.3.2026
+[windowsDesktop]
+### Change
+ added PostgresPassword
 
 ## [4.0.1.0] 3.2.2026
 [windowsDesktop]
