@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 [desktopMain]
 ### Change
  added PostgresPassword
+ updated conventVersion to 4.0.2.0
 
 ## [4.0.1.0] 3.2.2026
 [desktopMain]

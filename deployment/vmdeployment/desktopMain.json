@@ -555,7 +555,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/windowsDesktop.json')]",
-                    "contentVersion": "4.0.0.0"
+                    "contentVersion": "4.0.2.0"
                 },
                 "parameters": {
                     "location": {
