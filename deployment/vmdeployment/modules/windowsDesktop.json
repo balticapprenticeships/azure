@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.0.0",
+    "contentVersion": "4.0.2.0",
     "parameters": {
         "location": {
             "type": "string"
@@ -66,6 +66,9 @@
             "type": "string"
         },
         "localUserPassword": {
+            "type": "string"
+        },
+        "postgresPassword": {
             "type": "string"
         },
         "createdBy": {
@@ -257,7 +260,8 @@
                             "configurationArguments": {
                                 "Credential": {
                                     "Username": "[parameters('localUsername')]",
-                                    "Password": "[parameters('localUserPassword')]"
+                                    "Password": "[parameters('localUserPassword')]",
+                                    "PgPassword": "[parameters('postgresPassword')]"
                                 }
                             }
                         }

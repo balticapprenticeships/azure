@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.1.0",
+    "contentVersion": "4.0.2.0",
     "parameters": {
         "location": {
             "type": "string",
@@ -555,7 +555,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/windowsDesktop.json')]",
-                    "contentVersion": "4.0.0.0"
+                    "contentVersion": "4.0.2.0"
                 },
                 "parameters": {
                     "location": {
@@ -647,6 +647,14 @@
                                 "id": "[resourceId(variables('vaultResourceGroup'), 'Microsoft.KeyVault/vaults', variables('vaultName'))]"
                             },
                             "secretName": "LabUserPassword"
+                        }
+                    },
+                    "postgresPassword": {
+                        "reference": {
+                            "keyVault": {
+                                "id": "[resourceId(variables('vaultResourceGroup'), 'Microsoft.KeyVault/vaults', variables('vaultName'))]"
+                            },
+                            "secretName": "PostgresAdminPassword"
                         }
                     },
                     "createdBy": {
