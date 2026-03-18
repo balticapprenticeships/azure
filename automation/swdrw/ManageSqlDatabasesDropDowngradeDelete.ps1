@@ -1,5 +1,5 @@
 <#
-.VERSION    1.1.0
+.VERSION    1.1.1
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -21,7 +21,7 @@
 .RuntimeEnvironment PowerShell-7.2
 
 .NOTES
-    LASTEDIT: 17-03-2026
+    LASTEDIT: 18-03-2026
 #>
 
 param(
@@ -71,7 +71,7 @@ $InformationPreference = 'Continue'
 #–– Teams webhook from Automation Variable if not provided ––
 if (-not $teamsWebhookUrl) {
     try { 
-        $teamsWebhookUrl = Get-AutomationVariable -Name 'TeamWebhookUrlWeeklyCleanup' 
+        $teamsWebhookUrl = Get-AutomationVariable -Name 'TeamWebhookUrlSwDRwWeeklyCleanup' 
     }
     catch { 
         Write-Verbose "No Teams webhook URL provided or found." 
