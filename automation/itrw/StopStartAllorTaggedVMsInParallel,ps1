@@ -14,7 +14,7 @@ Workflow StopStartAllOrTaggedVMsInParallel
 
     ## Authentication
     Write-Output ""
-    Write-Output "------------------------ Authentication ------------------------"
+    Write-Output "------------------------ Authentication -----------------------"
     Write-Output "Logging into Azure ..."
 
     try
