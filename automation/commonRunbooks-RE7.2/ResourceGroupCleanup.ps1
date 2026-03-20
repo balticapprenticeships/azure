@@ -1,33 +1,39 @@
 <#
-.VERSION    4.3.2
+.VERSION    4.4.3
 .AUTHOR     Chris Langford
-.COPYRIGHT  (c) 2025 Chris Langford. All rights reserved.
+.COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
 .SYNOPSIS   Cleans up Azure resources tagged Cleanup=Enabled, with advanced logging and Teams notifications.
+,DESCRIPTION This runbook identifies Azure VMs, NSGs, and VNets tagged with Cleanup=Enabled and attempts to remove them along with their dependencies. It includes robust error handling, retry logic, and sends a detailed summary to Microsoft Teams via webhook.
+.PARAMETER cleanupEnabled
+    A boolean flag to enable or disable actual cleanup. Set to False for testing/logging without deletion.
+.PARAMETER teamsWebhookUrl
+    Optional Microsoft Teams webhook URL for posting cleanup summaries. If not provided, it will attempt to retrieve from an Automation Variable named 'TeamWebhookUrlWeeklyCleanup'.
+.PARAMETER ParallelMode
+    If set to True, VM deletions will be processed in parallel with a throttle limit defined by ThrottleLimit parameter. NSG and VNet cleanup will still be processed sequentially to ensure safe dependency handling.
+.PARAMETER ThrottleLimit
+    When ParallelMode is enabled, this parameter controls how many VM deletions run concurrently. Default is 5.
+.RuntimeEnvironment PowerShell-7.2
 .NOTES
-    LASTEDIT: 27-08-2025
+    LASTEDIT: 20-03-2026
 #>
 
 param(
-    # Master toggle for cleanup (required, must be $true or $false explicitly)
     [Parameter(Mandatory=$true)]
     [ValidateNotNull()]
     [bool] $cleanupEnabled,
 
-    # Teams webhook URL (optional, must be https:// if provided)
     [Parameter(Mandatory=$false)]
     [ValidatePattern('^https://.*')]
     [string] $teamsWebhookUrl,
 
-    # Execution mode: Sequential (safe) or Parallel (faster, riskier)
     [Parameter(Mandatory=$true)]
     [ValidateNotNull()]
     [bool] $ParallelMode = $false,
 
-    # Throttle for parallel jobs (only matters if ExecutionMode = Parallel)
     [Parameter(Mandatory=$false)]
     [ValidateRange(1, 20)]
-    [int] $ThrottleLimit = 5  # <-- new parameter (default 5)
+    [int] $ThrottleLimit = 5
 )
 
 #–– Preferences ––
@@ -36,28 +42,25 @@ $WarningPreference     = 'Continue'
 $VerbosePreference     = 'SilentlyContinue'
 $InformationPreference = 'Continue'
 
-# Convert datetime to London time and format
-function Format-LondonTime {
-    param([datetime]$dt)
+#–– Time helpers ––
+function Format-LondonTime { param([datetime]$dt)
     $tzLondon = [System.TimeZoneInfo]::FindSystemTimeZoneById("GMT Standard Time")
-    $dtLondon = [System.TimeZoneInfo]::ConvertTime($dt, $tzLondon)
-    return $dtLondon.ToString("dd/MM/yyyy HH:mm:ss")
+    [System.TimeZoneInfo]::ConvertTime($dt, $tzLondon).ToString("dd/MM/yyyy HH:mm:ss")
 }
 
-# Function to convert datetime to London time
-function Get-LondonTime {
+function Get-LondonTime { 
     param([datetime]$dt)
     $tzLondon = [System.TimeZoneInfo]::FindSystemTimeZoneById("GMT Standard Time")
     [System.TimeZoneInfo]::ConvertTime($dt, $tzLondon)
 }
 
-# Set teamsWebhookUrl from automation variable if not provided
+#–– Teams webhook from Automation Variable if not provided ––
 if (-not $teamsWebhookUrl) {
-    try {
-        $teamsWebhookUrl = Get-AutomationVariable -Name 'TeamWebhookUrlWeeklyCleanup'
+    try { 
+        $teamsWebhookUrl = Get-AutomationVariable -Name 'TeamsWebhookUrlWeeklyCleanup' 
     }
-    catch {
-        Write-Verbose "No Teams webhook URL provided or found in automation variables."
+    catch { 
+        Write-Verbose "No Teams webhook URL provided or found." 
     }
 }
 
@@ -66,14 +69,10 @@ $transcriptTime = (Get-LondonTime (Get-Date)).ToString("ddMMyyyy_HHmmss")
 $transcript = Join-Path $env:TEMP "CleanupRun_$transcriptTime.txt"
 Start-Transcript -Path $transcript -Force
 
-# Log execution mode
-if ($ParallelMode) {
-    Write-Information "Execution Mode: Parallel (ThrottleLimit=$ThrottleLimit)" -Tags CleanupRun
-}
-else {
-    Write-Information "Execution Mode: Sequential" -Tags CleanupRun
-}
+#–– Logging execution mode ––
+Write-Information "Execution Mode: $(if ($ParallelMode) {"Parallel (ThrottleLimit=$ThrottleLimit)"} else {"Sequential"})" -Tags CleanupRun
 
+#–– Global cleanup results ––
 $global:cleanupResults = @{
     StartTime      = Get-Date
     StartTimeStr   = Format-LondonTime (Get-Date)
@@ -91,36 +90,126 @@ $global:cleanupResults = @{
     Errors         = 0
 
     VMsRemovedRGs  = @()
-    NSGsRemovedRGs  = @()
-    VNetsRemovedRGs = @()
+    NSGsRemovedRGs = @()
+    VNetsRemovedRGs= @()
 }
 
 Write-Information "Cleanup run started at $($global:cleanupResults.StartTimeStr)" -Tags CleanupRun
 
+#–– Authenticate ––
 try {
-    Write-Verbose "Authenticating to Azure with managed identity at $(Format-LondonTime (Get-Date))..."
     Connect-AzAccount -Identity
     Write-Information "Azure authentication succeeded." -Tags Authentication
 }
-catch {
-    Write-Error "Authentication failed: $_"
-    Stop-Transcript
-    throw
-}
+catch { Write-Error "Authentication failed: $_"; Stop-Transcript; throw }
 
 # Get current Azure subscription name
 $subscriptionName = (Get-AzContext).Subscription.Name
 
+#–– Exit if cleanup not enabled ––
 if (-not $cleanupEnabled) {
     Write-Information "cleanupEnabled flag is False. No resources will be removed." -Tags CleanupRun
     Stop-Transcript
     return
 }
 
-#–– Functions ––
-function Remove-BootDiagnostics {
-    param($VM)
+#–– Retry wrapper ––
+function Invoke-WithRetry {
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock] $ScriptBlock,
 
+        [int] $MaxRetries = 3,
+        [int] $InitialDelaySeconds = 10,
+        [string] $OperationName = "Operation"
+    )
+
+    $attempt = 1
+    $delay = $InitialDelaySeconds
+
+    while ($attempt -le $MaxRetries) {
+        try {
+            Write-Information "[$OperationName] Attempt $attempt of $MaxRetries." -Tags Retry
+            & $ScriptBlock
+            Write-Information "[$OperationName] succeeded on attempt $attempt." -Tags Retry
+            return $true
+        }
+        catch {
+            Write-Warning "[$OperationName] failed on attempt ${attempt}: $($_.Exception.Message)"
+
+            if ($attempt -eq $MaxRetries) {
+                Write-Warning "[$OperationName] exhausted all retries."
+                return $false
+            }
+
+            Start-Sleep -Seconds $delay
+            $attempt++
+            $delay = [Math]::Min($delay * 2, 60)
+        }
+    }
+}
+
+#–– Wait helpers ––
+function Wait-ForNoNICs {
+    param(
+        [string] $ResourceGroupName,
+        [int] $TimeoutSeconds = 300,
+        [int] $PollIntervalSeconds = 15
+    )
+    $elapsed = 0
+    while ($elapsed -lt $TimeoutSeconds) {
+        $nics = Get-AzNetworkInterface -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue
+        if (-not $nics -or $nics.Count -eq 0) {
+            Write-Information "No NICs in RG '$ResourceGroupName'." -Tags Wait
+            return $true
+        }
+        Write-Information "Waiting: $($nics.Count) NIC(s) remain in RG '$ResourceGroupName'..." -Tags Wait
+        Start-Sleep -Seconds $PollIntervalSeconds
+        $elapsed += $PollIntervalSeconds
+    }
+    Write-Warning "Timeout waiting for NICs in RG '$ResourceGroupName'."
+    return $false
+}
+
+function Wait-ForNoSubnetsInUse {
+    param(
+        [string] $ResourceGroupName,
+        [string] $VNetName,
+        [int] $TimeoutSeconds = 600,
+        [int] $PollIntervalSeconds = 15
+    )
+    $elapsed = 0
+    while ($elapsed -lt $TimeoutSeconds) {
+        $vnet = Get-AzVirtualNetwork -ResourceGroupName $ResourceGroupName -Name $VNetName -ErrorAction Stop
+        $reasons = @()
+        $nics = Get-AzNetworkInterface -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue
+        if ($vnet.Subnets) {
+            foreach ($sub in $vnet.Subnets) {
+                if (($nics | Where-Object { $_.IpConfigurations.Subnet.Id -eq $sub.Id }).Count -gt 0) { $reasons += "Subnet '$($sub.Name)' has NICs" }
+                if ($sub.Delegations -and $sub.Delegations.Count -gt 0) { $reasons += "Subnet '$($sub.Name)' has delegations" }
+            }
+        }
+        if (Get-AzPrivateEndpoint -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue |
+            Where-Object { $_.Subnet.Id -like "$($vnet.Id)/*" }) { $reasons += "Private Endpoints exist" }
+        if (Get-AzBastion -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue) { $reasons += "Bastion exists" }
+        if (Get-AzFirewall -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue) { $reasons += "Firewall exists" }
+        if (Get-AzVirtualNetworkGateway -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue) { $reasons += "Gateway exists" }
+
+        if ($reasons.Count -eq 0) {
+            Write-Information "VNet '$VNetName' has no dependencies." -Tags Wait
+            return $true
+        }
+
+        Write-Information "Waiting on VNet '$VNetName': $($reasons -join '; ')" -Tags Wait
+        Start-Sleep -Seconds $PollIntervalSeconds
+        $elapsed += $PollIntervalSeconds
+    }
+    Write-Warning "Timeout waiting for subnet dependencies on VNet '$VNetName'."
+    return $false
+}
+
+#–– VM + Boot Diagnostics Cleanup ––
+function Remove-BootDiagnostics { param($VM)
     try {
         $uri = $VM.DiagnosticsProfile.BootDiagnostics.StorageUri
         if (-not $uri) { return }
@@ -129,187 +218,159 @@ function Remove-BootDiagnostics {
         $shortName   = $cleanName.Substring(0, [Math]::Min(9, $cleanName.Length))
         $sanitizedId = ($VM.Id -replace '[^0-9a-zA-Z]', '').ToLower()
         $container   = "bootdiagnostics-$shortName-$sanitizedId"
-        #$container   = "bootdiagnostics-$shortName-$($VM.Id)"
         $sa          = Get-AzStorageAccount -Name $storageName -ErrorAction Stop
         $ctx         = $sa.Context
-
-        Write-Verbose "Removing boot diagnostics container '$container' from storage account '$storageName'."
         Remove-AzStorageContainer -Name $container -Context $ctx -Force -ErrorAction Ignore
-
-        Write-Information "Boot diagnostics container cleaned up for VM '$($VM.Name)'." -Tags Diagnostics
+        Write-Information "Boot diagnostics cleaned for VM '$($VM.Name)'." -Tags Diagnostics
     }
-    catch {
+    catch { 
         Write-Warning "Failed to remove boot diagnostics for '$($VM.Name)': $_"
         $global:cleanupResults.FailedVMs += $VM.Name
-        $global:cleanupResults.Errors++
+        $global:cleanupResults.Errors++ 
     }
 }
 
-function Remove-VMAndDependencies {
-    param($VM)
-
+function Remove-VMAndDependencies { param($VM)
     try {
-        Write-Information "Starting cleanup for VM '$($VM.Name)' in RG '$($VM.ResourceGroupName)'." -Tags VM
+        Write-Information "Cleaning VM '$($VM.Name)' in RG '$($VM.ResourceGroupName)'." -Tags VM
 
-        # 1. Boot diagnostics
+        # 1. Boot diagnostic
         Remove-BootDiagnostics -VM $VM
 
         # 2. Network interfaces
         $nics = Get-AzNetworkInterface -ResourceGroupName $VM.ResourceGroupName | Where-Object { $_.VirtualMachine.Id -eq $VM.Id }
         foreach ($nic in $nics) {
-            Write-Verbose "Removing NIC '$($nic.Name)'."
-            Remove-AzNetworkInterface -Name $nic.Name -ResourceGroupName $VM.ResourceGroupName -Force -ErrorAction SilentlyContinue
+            Write-Information "Removing NIC '$($nic.Name)' for VM '$($VM.Name)'." 
+            Remove-AzNetworkInterface -Name $nic.Name -ResourceGroupName $VM.ResourceGroupName -Force -ErrorAction SilentlyContinue 
         }
 
         # 3. VM itself
-        Write-Verbose "Removing VM '$($VM.Name)'."
+        Write-Information "Removing VM '$($VM.Name)'."
         Remove-AzVM -Name $VM.Name -ResourceGroupName $VM.ResourceGroupName -Force
 
-        # 4. OS disk
+        # 4. OS Disk (only if not managed by another resource)
         $osDiskName = $VM.StorageProfile.OsDisk.Name
         $osDisk = Get-AzDisk -ResourceGroupName $VM.ResourceGroupName -Name $osDiskName -ErrorAction SilentlyContinue
         if ($osDisk -and -not $osDisk.ManagedBy) {
-            Write-Verbose "Removing unattached OS disk '$osDiskName'."
-            Remove-AzDisk -ResourceGroupName $VM.ResourceGroupName -Name $osDiskName -Force -ErrorAction SilentlyContinue
+            Write-Information "Removing OS Disk '$osDiskName' for VM '$($VM.Name)'." 
+            Remove-AzDisk -ResourceGroupName $VM.ResourceGroupName -Name $osDiskName -Force -ErrorAction SilentlyContinue 
         }
 
-        Write-Information "VM '$($VM.Name)' and dependencies removed." -Tags VM
+        Write-Information "VM '$($VM.Name)' and dependencies removed successfully."
         $global:cleanupResults.VMsRemoved++
         $global:cleanupResults.VMsRemovedRGs += $VM.ResourceGroupName
-
     }
-    catch {
+    catch { 
         Write-Warning "Error cleaning VM '$($VM.Name)': $_"
         $global:cleanupResults.FailedVMs += $VM.Name
-        $global:cleanupResults.Errors++
-    }
+        $global:cleanupResults.Errors++ }
 }
 
+#–– NSG cleanup ––
 function Remove-NSGs {
-    try {
-        $nsgs = Get-AzNetworkSecurityGroup |
-                Where-Object { $_.Tags.Keys -contains 'Cleanup' -and $_.Tags['Cleanup'].ToString().ToLower() -eq 'enabled' }
-
-        foreach ($nsg in $nsgs) {
-            Write-Information "Attempting to remove NSG '$($nsg.Name)' in RG '$($nsg.ResourceGroupName)'." -Tags NSG
-            try {
-                Remove-AzNetworkSecurityGroup -Name $nsg.Name -ResourceGroupName $nsg.ResourceGroupName -Force -ErrorAction Stop
-                Write-Information "NSG '$($nsg.Name)' removed successfully." -Tags NSG
+    $nsgs = Get-AzNetworkSecurityGroup | Where-Object { $_.Tags -and $_.Tags['Cleanup'] -ieq 'Enabled' }
+    foreach ($nsg in $nsgs) {
+        try {
+            $nics = Get-AzNetworkInterface -ResourceGroupName $nsg.ResourceGroupName | Where-Object { $_.NetworkSecurityGroup -and $_.NetworkSecurityGroup.Id -eq $nsg.Id }
+            foreach ($nic in $nics) { Invoke-WithRetry -OperationName "Detach NSG from NIC $($nic.Name)" -ScriptBlock { $nic.NetworkSecurityGroup = $null; Set-AzNetworkInterface -NetworkInterface $nic -ErrorAction Stop } }
+            $vnets = Get-AzVirtualNetwork -ResourceGroupName $nsg.ResourceGroupName
+            foreach ($vnet in $vnets) {
+                $changed = $false
+                foreach ($sub in $vnet.Subnets) {
+                    if ($sub.NetworkSecurityGroup -and $sub.NetworkSecurityGroup.Id -eq $nsg.Id) { $sub.NetworkSecurityGroup = $null; $changed = $true }
+                }
+                if ($changed) { Set-AzVirtualNetwork -VirtualNetwork $vnet }
             }
-            catch {
-                Write-Warning "Could not remove NSG '$($nsg.Name)': $($_.Exception.Message)"
-                $global:cleanupResults.FailedNSGs += "$($nsg.Name) — $($_.Exception.Message)"
-                $global:cleanupResults.Errors++
-            }
+            Start-Sleep -Seconds 15
+            Invoke-WithRetry -OperationName "Delete NSG $($nsg.Name)" -ScriptBlock { Remove-AzNetworkSecurityGroup -Name $nsg.Name -ResourceGroupName $nsg.ResourceGroupName -Force -ErrorAction Stop }
+            $global:cleanupResults.NSGsRemovedRGs += "$($nsg.Name) (RG: $($nsg.ResourceGroupName))"
+        }
+        catch { 
+            Write-Warning "Failed NSG '$($nsg.Name)': $($_.Exception.Message)"
+            $global:cleanupResults.FailedNSGs += "$($nsg.Name) — $($_.Exception.Message)"
+            $global:cleanupResults.Errors++ 
         }
     }
-    catch {
-        Write-Warning "NSG cleanup encountered an unexpected error: $_"
-        $global:cleanupResults.Errors++
-    }
 }
 
-function Remove-VirtualNetworks {
-    try {
-        $vnets = Get-AzVirtualNetwork | Where-Object { $_.Tags.Keys -contains 'Cleanup' -and $_.Tags['Cleanup'].ToString().ToLower() -eq 'enabled' }
+#–– Safe Network Cleanup ––
+function Invoke-NetworkCleanupSafely {
 
-        foreach ($vnet in $vnets) {
-            Write-Information "Checking dependencies for VNet '$($vnet.Name)'." -Tags VNet
-            $busy = $false
-            $reasons = @()
+    # Determine RGs based on tagged resources, not parallel state
+    $resourceGroups = Get-AzResource |
+        Where-Object { $_.Tags -and $_.Tags['Cleanup'] -ieq 'Enabled' } |
+        Select-Object -ExpandProperty ResourceGroupName -Unique
 
-            # 1. NICs
-            foreach ($sub in $vnet.Subnets) {
-                $attachedNics = (Get-AzNetworkInterface -SubnetId $sub.Id -ErrorAction SilentlyContinue).Count
-                if ($attachedNics -gt 0) {
-                    $busy = $true
-                    $reasons += "Subnet '$($sub.Name)' has $attachedNics NIC(s)"
+    foreach ($rg in $resourceGroups) {
+        try {
+            Write-Information "Starting network cleanup for RG '$rg'." -Tags Network
+
+            if (-not (Wait-ForNoNICs -ResourceGroupName $rg)) {
+                Write-Warning "Skipping NSG/VNet cleanup for RG '$rg' due to NIC timeout."
+                $global:cleanupResults.Errors++
+                continue
+            }
+
+            # ---- NSGs ----
+            Remove-NSGs
+
+            # ---- VNets ----
+            $vnets = Get-AzVirtualNetwork -ResourceGroupName $rg |
+                    Where-Object { $_.Tags -and $_.Tags['Cleanup'] -ieq 'Enabled' }
+
+            foreach ($vnet in $vnets) {
+
+                if (-not (Wait-ForNoSubnetsInUse -ResourceGroupName $rg -VNetName $vnet.Name)) {
+                    $msg = "$($vnet.Name) (RG: $rg) - Timeout waiting for dependencies"
+                    Write-Warning $msg
+                    $global:cleanupResults.DependencyVNets += $msg
+                    $global:cleanupResults.Errors++
+                    continue
                 }
-            }
 
-            # 2. Virtual Network Gateways
-            $gateways = Get-AzVirtualNetworkGateway -ResourceGroupName $vnet.ResourceGroupName -ErrorAction SilentlyContinue |
-                        Where-Object { $_.IpConfigurations.Subnet.Id -like "$($vnet.Id)/*" }
-            if ($gateways) {
-                $busy = $true
-                $reasons += "Virtual Network Gateway present"
-            }
-
-            # 3. Private Endpoints
-            $peps = Get-AzPrivateEndpoint -ResourceGroupName $vnet.ResourceGroupName -ErrorAction SilentlyContinue |
-                    Where-Object { $_.Subnet.Id -like "$($vnet.Id)/*" }
-            if ($peps) {
-                $busy = $true
-                $reasons += "$($peps.Count) Private Endpoint(s)"
-            }
-
-            # 4. Bastion Hosts
-            $bastions = Get-AzBastion -ResourceGroupName $vnet.ResourceGroupName -ErrorAction SilentlyContinue |
-                        Where-Object { $_.IpConfigurations.Subnet.Id -like "$($vnet.Id)/*" }
-            if ($bastions) {
-                $busy = $true
-                $reasons += "Bastion host present"
-            }
-
-            # 5. Firewalls
-            $firewalls = Get-AzFirewall -ResourceGroupName $vnet.ResourceGroupName -ErrorAction SilentlyContinue |
-                         Where-Object { $_.IpConfigurations.Subnet.Id -like "$($vnet.Id)/*" }
-            if ($firewalls) {
-                $busy = $true
-                $reasons += "Azure Firewall present"
-            }
-
-            if (-not $busy) {
-                try {
-                    Write-Information "Removing VNet '$($vnet.Name)' in RG '$($vnet.ResourceGroupName)'." -Tags VNet
-                    Remove-AzVirtualNetwork -Name $vnet.Name -ResourceGroupName $vnet.ResourceGroupName -Force -ErrorAction Stop
-                    Write-Information "VNet '$($vnet.Name)' removed successfully." -Tags VNet
+                $success = Invoke-WithRetry -OperationName "Delete VNet $($vnet.Name)" -MaxRetries 5 -InitialDelaySeconds 15 -ScriptBlock {
+                    Remove-AzVirtualNetwork -Name $vnet.Name -ResourceGroupName $rg -Force -ErrorAction Stop
                 }
-                catch {
-                    Write-Warning "Could not remove VNet '$($vnet.Name)': $($_.Exception.Message)"
-                    $global:cleanupResults.SkippedVNets += "$($vnet.Name) — $($reasons -join '; ')"
+
+                if ($success) {
+                    $global:cleanupResults.VNetsRemovedRGs += "$($vnet.Name) (RG: $rg)"
+                }
+                else {
+                    $msg = "$($vnet.Name) (RG: $rg) - Delete failed after retries"
+                    $global:cleanupResults.SkippedVNets += $msg
                     $global:cleanupResults.Errors++
                 }
             }
-            else {
-                Write-Warning "Skipping VNet '$($vnet.Name)' due to dependencies: $($reasons -join '; ')"
-                $global:cleanupResults.DependencyVNets += "$($vnet.Name) (RG: $($vnet.ResourceGroupName)) - $($reasons -join '; ')"
-
-            }
         }
-    }
-    catch {
-        Write-Warning "VNet cleanup encountered an unexpected error: $_"
-        $global:cleanupResults.Errors++
+        catch {
+            Write-Warning "Network cleanup failed for RG '$rg': $($_.Exception.Message)"
+            $global:cleanupResults.Errors++
+        }
     }
 }
 
-
-#–– VM Cleanup ––
+#–– VM Cleanup Execution ––
 $vmList = Get-AzVM | Where-Object { $_.Tags -and $_.Tags['Cleanup'] -ieq 'Enabled' }
 $global:cleanupResults.VMsTargeted = $vmList.Count
 
 if ($vmList) {
-    if ($ParallelMode) {
-        Write-Information "Running VM cleanup in PARALLEL mode (ThrottleLimit=$ThrottleLimit)." -Tags VM
 
-        # Export the function bodies as ScriptBlocks so they can be recreated inside parallel runspaces
+    if ($ParallelMode) {
+
         $removeVMScript   = (Get-Item -Path Function:\Remove-VMAndDependencies).ScriptBlock
         $removeBootScript = (Get-Item -Path Function:\Remove-BootDiagnostics).ScriptBlock
 
         $vmList | ForEach-Object -Parallel {
             param($vm, $removeVMScript, $removeBootScript)
 
-            # Recreate the functions in this runspace so they can be invoked normally
             Set-Item -Path Function:\Remove-BootDiagnostics -Value $removeBootScript
             Set-Item -Path Function:\Remove-VMAndDependencies -Value $removeVMScript
 
-            # Run cleanup
             Remove-VMAndDependencies -VM $vm
+
         } -ArgumentList $using:removeVMScript, $using:removeBootScript -ThrottleLimit $ThrottleLimit
     }
     else {
-        Write-Information "Running VM cleanup in SEQUENTIAL mode." -Tags VM
         foreach ($vm in $vmList) {
             Remove-VMAndDependencies -VM $vm
         }
@@ -319,18 +380,26 @@ else {
     Write-Information "No VMs found with Cleanup=Enabled tag." -Tags VM
 }
 
-#–– NSG and VNet Cleanup ––
-Remove-NSGs
-Remove-VirtualNetworks
+#–– Safe NSG + VNet Cleanup ––
+try {
+    Invoke-NetworkCleanupSafely
+}
+catch {
+    Write-Warning "Network cleanup failed unexpectedly: $($_.Exception.Message)"
+    $global:cleanupResults.Errors++
+}
 
-#–– Wrap Up ––
+#–– Wrap-up ––
 $global:cleanupResults.EndTime  = Get-Date
 $global:cleanupResults.EndTimeStr = Format-LondonTime $global:cleanupResults.EndTime
 $global:cleanupResults.Duration = [math]::Round((New-TimeSpan -Start $global:cleanupResults.StartTime -End $global:cleanupResults.EndTime).TotalMinutes, 2)
-
 Write-Information "Cleanup completed at $($global:cleanupResults.EndTimeStr) (Duration: $($global:cleanupResults.Duration) min)" -Tags CleanupRun
 
 Stop-Transcript
+
+#–– Teams Notification ––
+# (Your original Teams code here can remain unchanged)
+
 
 #–– Teams Notification with RG Summary Counts, Collapsible Sections, and Color Coding ––
 if ($teamsWebhookUrl) {
