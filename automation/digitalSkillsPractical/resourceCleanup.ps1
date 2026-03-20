@@ -1,5 +1,5 @@
 <#
-.VERSION    1.0.0
+.VERSION    1.0.1
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -20,10 +20,10 @@ param(
     [ValidateNotNull()]
     [bool] $cleanupEnabled,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string] $ExcludeTagName = "Delete",
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string] $ExcludeTagValue = "DoNotDelete",
 
     [Parameter(Mandatory=$false)]
