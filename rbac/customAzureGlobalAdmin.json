@@ -3,7 +3,7 @@
         "roleName": "Azure Global Admin",
         "description": "Grants administrative access to manage all resources, including the ability to view budgets.",
         "assignableScopes": [
-            "/providers/Microsoft.Management/managementGroups/0c79f314-54e0-4815-81ef-13785f702b51"
+            "/providers/Microsoft.Management/managementGroups/<management-group-id>"
         ],
         "permissions": [
             {

@@ -1,10 +1,10 @@
 {
+    "id": "/subscriptions/42ae00f5-c447-4ade-bb2a-55b2a5d7480d/providers/Microsoft.Authorization/roleDefinitions/22e6bee4-57a9-432c-a076-769c6dc01883",
     "properties": {
-        "roleName": "Baltic Coach RBAC",
-        "IsCustom": true,
+        "roleName": "Baltic Coach Role",
         "description": "This role give the coaches the ability to create VMs and associated resources.",
         "assignableScopes": [
-          "/subscriptions/<SUBSCRIPTION-ID>"
+            "/subscriptions/<subscription-id>"
         ],
         "permissions": [
             {
@@ -65,5 +65,5 @@
                 "notDataActions": []
             }
         ]
-    } 
+    }
 }

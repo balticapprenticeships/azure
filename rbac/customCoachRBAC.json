@@ -3,7 +3,7 @@
         "roleName": "Baltic Coach Role",
         "description": "This role give the coaches the ability to create VMs and associated resources.",
         "assignableScopes": [
-            "/subscriptions/42ae00f5-c447-4ade-bb2a-55b2a5d7480d"
+            "/subscriptions/<subscription-id>"
         ],
         "permissions": [
             {
