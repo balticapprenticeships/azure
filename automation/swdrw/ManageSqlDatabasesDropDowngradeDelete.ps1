@@ -115,7 +115,7 @@ Resources
 | where type == 'microsoft.sql/servers/databases'
 | where subscriptionId == '$subscriptionId'
 | where name != 'master'
-| where name endswith '$(DatabaseNamePattern.TrimStart('*'))'
+| where name contains '$DatabaseNamePattern'
 | project name, resourceGroup, subscriptionId, tags, sku, id
 "@
 
