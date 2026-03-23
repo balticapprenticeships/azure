@@ -33,7 +33,13 @@ param(
 
     [Parameter(Mandatory=$false)]
     [ValidateRange(1, 20)]
-    [int] $ThrottleLimit = 5
+    [int] $ThrottleLimit = 5,
+
+    [Parameter(Mandatory=$false)]
+    [int] $NICWaitTimeout = 300,
+
+    [Parameter(Mandatory=$false)]
+    [int] $VMDeletionSettleTimeout = 300
 )
 
 #–– Preferences ––
@@ -153,7 +159,7 @@ function Invoke-WithRetry {
 function Wait-ForNoNICs {
     param(
         [string] $ResourceGroupName,
-        [int] $TimeoutSeconds = 300,
+        [int] $TimeoutSeconds = $NICWaitTimeout,
         [int] $PollIntervalSeconds = 15
     )
     $elapsed = 0
@@ -163,7 +169,17 @@ function Wait-ForNoNICs {
             Write-Information "No NICs in RG '$ResourceGroupName'." -Tags Wait
             return $true
         }
-        Write-Information "Waiting: $($nics.Count) NIC(s) remain in RG '$ResourceGroupName'..." -Tags Wait
+
+        # --- Enhanced logging: show why NICs remain ---
+        Write-Warning "Waiting: $($nics.Count) NIC(s) remain in RG '$ResourceGroupName'. Logging details..."
+        foreach ($nic in $nics) {
+            $attachedVm = if ($nic.VirtualMachine) { $nic.VirtualMachine.Id } else { '<none>' }
+            $provState  = $nic.ProvisioningState
+            $ipConfigs  = ($nic.IpConfigurations | ForEach-Object { $_.Name + ':' + ($_.PrivateIpAddress -or '<no-ip>') }) -join '; '
+            $lbPools    = ($nic.IpConfigurations | ForEach-Object { ($_.LoadBalancerBackendAddressPools | ForEach-Object { $_.Id }) -join ',' }) -join '; '
+            Write-Information "NIC: $($nic.Name) | ProvisioningState: $provState | AttachedVM: $attachedVm | IPs: $ipConfigs | LBPools: $lbPools" -Tags Wait
+        }
+
         Start-Sleep -Seconds $PollIntervalSeconds
         $elapsed += $PollIntervalSeconds
     }
@@ -208,6 +224,29 @@ function Wait-ForNoSubnetsInUse {
     return $false
 }
 
+function Wait-ForVMNicDetach {
+    param(
+        [string] $ResourceGroupName,
+        [string] $VMName,
+        [int] $TimeoutSeconds = 60,
+        [int] $PollIntervalSeconds = 5
+    )
+    $elapsed = 0
+    while ($elapsed -lt $TimeoutSeconds) {
+        $nics = Get-AzNetworkInterface -ResourceGroupName $ResourceGroupName -ErrorAction SilentlyContinue |
+                Where-Object { $_.VirtualMachine -and $_.VirtualMachine.Id -like "*$VMName" }
+        if (-not $nics -or $nics.Count -eq 0) {
+            Write-Information "VM '$VMName' detached from NICs."
+            return $true
+        }
+        Write-Information "Waiting for VM '$VMName' to detach from $($nics.Count) NIC(s)..." -Tags Wait
+        Start-Sleep -Seconds $PollIntervalSeconds
+        $elapsed += $PollIntervalSeconds
+    }
+    Write-Warning "Timeout waiting for VM '$VMName' to detach from NICs."
+    return $false
+}
+
 #–– VM + Boot Diagnostics Cleanup ––
 function Remove-BootDiagnostics { param($VM)
     try {
@@ -237,16 +276,28 @@ function Remove-VMAndDependencies { param($VM)
         # 1. Boot diagnostic
         Remove-BootDiagnostics -VM $VM
 
-        # 2. Network interfaces
-        $nics = Get-AzNetworkInterface -ResourceGroupName $VM.ResourceGroupName | Where-Object { $_.VirtualMachine.Id -eq $VM.Id }
+        # 2. Network interfaces - enhanced: retry-backed deletion
+        $nics = Get-AzNetworkInterface -ResourceGroupName $VM.ResourceGroupName -ErrorAction SilentlyContinue | Where-Object { $_.VirtualMachine -and $_.VirtualMachine.Id -eq $VM.Id }
         foreach ($nic in $nics) {
-            Write-Information "Removing NIC '$($nic.Name)' for VM '$($VM.Name)'." 
-            Remove-AzNetworkInterface -Name $nic.Name -ResourceGroupName $VM.ResourceGroupName -Force -ErrorAction SilentlyContinue 
+            Write-Information "Attempting to remove NIC '$($nic.Name)' for VM '$($VM.Name)'."
+            $deleteNicScript = {
+                param($nicName, $rgName)
+                Remove-AzNetworkInterface -Name $nicName -ResourceGroupName $rgName -Force -ErrorAction Stop
+            }
+            $success = Invoke-WithRetry -OperationName "Delete NIC $($nic.Name)" -MaxRetries 4 -InitialDelaySeconds 10 -ScriptBlock { & $deleteNicScript $using:nic.Name $using:VM.ResourceGroupName }
+            if (-not $success) {
+                Write-Warning "Failed to delete NIC '$($nic.Name)' after retries."
+                $global:cleanupResults.FailedVMs += "$($VM.Name) - NIC:$($nic.Name)"
+                $global:cleanupResults.Errors++
+            }
         }
 
         # 3. VM itself
         Write-Information "Removing VM '$($VM.Name)'."
         Remove-AzVM -Name $VM.Name -ResourceGroupName $VM.ResourceGroupName -Force
+
+        # Wait briefly for platform detach before attempting disk/NIC cleanup
+        Wait-ForVMNicDetach -ResourceGroupName $VM.ResourceGroupName -VMName $VM.Name -TimeoutSeconds 90
 
         # 4. OS Disk (only if not managed by another resource)
         $osDiskName = $VM.StorageProfile.OsDisk.Name
@@ -305,7 +356,7 @@ function Invoke-NetworkCleanupSafely {
         try {
             Write-Information "Starting network cleanup for RG '$rg'." -Tags Network
 
-            if (-not (Wait-ForNoNICs -ResourceGroupName $rg)) {
+            if (-not (Wait-ForNoNICs -ResourceGroupName $rg -TimeoutSeconds $NICWaitTimeout)) {
                 Write-Warning "Skipping NSG/VNet cleanup for RG '$rg' due to NIC timeout."
                 $global:cleanupResults.Errors++
                 continue
@@ -380,6 +431,24 @@ else {
     Write-Information "No VMs found with Cleanup=Enabled tag." -Tags VM
 }
 
+#–– Ensure network cleanup waits for VM deletions to settle ––
+function Wait-ForAllTargetVMsGone {
+    param([int] $TimeoutSeconds = $VMDeletionSettleTimeout, [int] $PollIntervalSeconds = 15)
+    $elapsed = 0
+    while ($elapsed -lt $TimeoutSeconds) {
+        $remaining = Get-AzVM | Where-Object { $_.Tags -and $_.Tags['Cleanup'] -ieq 'Enabled' }
+        if (-not $remaining -or $remaining.Count -eq 0) { return $true }
+        Write-Information "Waiting for $($remaining.Count) targeted VM(s) to be removed before network cleanup..."
+        Start-Sleep -Seconds $PollIntervalSeconds
+        $elapsed += $PollIntervalSeconds
+    }
+    Write-Warning "Timeout waiting for targeted VMs to be removed; proceeding with network cleanup."
+    return $false
+}
+
+# Wait for VMs to settle before network cleanup
+Wait-ForAllTargetVMsGone -TimeoutSeconds $VMDeletionSettleTimeout
+
 #–– Safe NSG + VNet Cleanup ––
 try {
     Invoke-NetworkCleanupSafely
@@ -396,10 +465,6 @@ $global:cleanupResults.Duration = [math]::Round((New-TimeSpan -Start $global:cle
 Write-Information "Cleanup completed at $($global:cleanupResults.EndTimeStr) (Duration: $($global:cleanupResults.Duration) min)" -Tags CleanupRun
 
 Stop-Transcript
-
-#–– Teams Notification ––
-# (Your original Teams code here can remain unchanged)
-
 
 #–– Teams Notification with RG Summary Counts, Collapsible Sections, and Color Coding ––
 if ($teamsWebhookUrl) {
