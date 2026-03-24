@@ -1,5 +1,5 @@
 <#
-.VERSION    2.0.0
+.VERSION    2.1.0
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -50,6 +50,14 @@ param (
     [switch]$WhatIf
 )
 
+# Convert portal string input to boolean
+if ($PSBoundParameters.ContainsKey('WhatIf')) {
+    $WhatIf = [bool]::Parse($WhatIf.ToString())
+} else {
+    $WhatIf = $false
+}
+
+# Teams Webhook URL can be passed as a parameter or stored as an Automation Variable
 if (-not $teamsWebhookUrl) {
     try { 
         $teamsWebhookUrl = Get-AutomationVariable -Name 'TeamsWebhookUrlDailyStopStart' 
