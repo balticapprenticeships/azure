@@ -1,5 +1,5 @@
 <#
-.VERSION    2.1.1
+.VERSION    2.2.1
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -113,7 +113,7 @@ function Wait-ForVMState {
 }
 
 # Parallel execution returning structured objects
-$results = $filteredVMs | ForEach-Object -Parallel {
+$results = ForEach-Object -InputObject $filteredVMs -Parallel {
     param($vm,$Action,$TimeoutSeconds,$PollIntervalSeconds,$MaxRetries,$WhatIf)
 
     $vmName = $vm.Name
