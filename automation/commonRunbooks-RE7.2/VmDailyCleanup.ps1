@@ -1,5 +1,5 @@
 <#
-.VERSION    1.1.0
+.VERSION    1.2.0
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -64,7 +64,7 @@ function Get-LondonTime {
 #–– Teams webhook from Automation Variable if not provided ––
 if (-not $teamsWebhookUrl) {
     try { 
-        $teamsWebhookUrl = Get-AutomationVariable -Name 'TeamsWebhookUrlWeeklyCleanup' 
+        $teamsWebhookUrl = Get-AutomationVariable -Name 'TeamsWebhookUrlDailyCleanup' 
     }
     catch { 
         Write-Verbose "No Teams webhook URL provided or found." 
@@ -320,7 +320,7 @@ function Remove-VMAndDependencies { param($VM)
 
 #–– NSG cleanup ––
 function Remove-NSGs {
-    $nsgs = Get-AzNetworkSecurityGroup | Where-Object { $_.Tags -and $_.Tags['Cleanup'] -ieq 'Enabled' }
+    $nsgs = Get-AzNetworkSecurityGroup | Where-Object { $_.Tags -and $_.Tags['CourseEndDay'] -ieq (Get-LondonTime (Get-Date)).DayOfWeek }
     foreach ($nsg in $nsgs) {
         try {
             $nics = Get-AzNetworkInterface -ResourceGroupName $nsg.ResourceGroupName | Where-Object { $_.NetworkSecurityGroup -and $_.NetworkSecurityGroup.Id -eq $nsg.Id }
@@ -350,7 +350,7 @@ function Invoke-NetworkCleanupSafely {
 
     # Determine RGs based on tagged resources, not parallel state
     $resourceGroups = Get-AzResource |
-        Where-Object { $_.Tags -and $_.Tags['Cleanup'] -ieq 'Enabled' } |
+        Where-Object { $_.Tags -and $_.Tags['CourseEndDay'] -ieq (Get-LondonTime (Get-Date)).DayOfWeek } |
         Select-Object -ExpandProperty ResourceGroupName -Unique
 
     foreach ($rg in $resourceGroups) {
@@ -368,7 +368,7 @@ function Invoke-NetworkCleanupSafely {
 
             # ---- VNets ----
             $vnets = Get-AzVirtualNetwork -ResourceGroupName $rg |
-                    Where-Object { $_.Tags -and $_.Tags['Cleanup'] -ieq 'Enabled' }
+                    Where-Object { $_.Tags -and $_.Tags['CourseEndDay'] -ieq (Get-LondonTime (Get-Date)).DayOfWeek }
 
             foreach ($vnet in $vnets) {
 
@@ -402,7 +402,7 @@ function Invoke-NetworkCleanupSafely {
 }
 
 #–– VM Cleanup Execution ––
-$vmList = Get-AzVM | Where-Object { $_.Tags -and $_.Tags['Cleanup'] -ieq 'Enabled' }
+$vmList = Get-AzVM | Where-Object { $_.Tags -and $_.Tags['CourseEndDay'] -ieq (Get-LondonTime (Get-Date)).DayOfWeek }
 $global:cleanupResults.VMsTargeted = $vmList.Count
 
 if ($vmList) {
@@ -437,7 +437,7 @@ function Wait-ForAllTargetVMsGone {
     param([int] $TimeoutSeconds = $VMDeletionSettleTimeout, [int] $PollIntervalSeconds = 15)
     $elapsed = 0
     while ($elapsed -lt $TimeoutSeconds) {
-        $remaining = Get-AzVM | Where-Object { $_.Tags -and $_.Tags['Cleanup'] -ieq 'Enabled' }
+        $remaining = Get-AzVM | Where-Object { $_.Tags -and $_.Tags['CourseEndDay'] -ieq (Get-LondonTime (Get-Date)).DayOfWeek }
         if (-not $remaining -or $remaining.Count -eq 0) { return $true }
         Write-Information "Waiting for $($remaining.Count) targeted VM(s) to be removed before network cleanup..."
         Start-Sleep -Seconds $PollIntervalSeconds
