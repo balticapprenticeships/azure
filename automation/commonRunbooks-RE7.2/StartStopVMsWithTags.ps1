@@ -1,5 +1,5 @@
 <#
-.VERSION    2.1.0
+.VERSION    2.1.1
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -16,7 +16,7 @@
 .Parameter   MaxRetries The maximum number of retries for transient errors (default: 3).
 .RuntimeEnvironment PowerShell-7.2
 .NOTES
-    LASTEDIT    24.03.2026
+    LASTEDIT    25.03.2026
 #>
 
 param (
@@ -56,6 +56,10 @@ if ($PSBoundParameters.ContainsKey('WhatIf')) {
 } else {
     $WhatIf = $false
 }
+
+# Runtime validation
+Write-Output "PSVersion: $($PSVersionTable.PSVersion)"
+
 
 # Teams Webhook URL can be passed as a parameter or stored as an Automation Variable
 if (-not $teamsWebhookUrl) {

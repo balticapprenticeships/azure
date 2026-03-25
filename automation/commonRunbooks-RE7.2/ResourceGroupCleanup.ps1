@@ -1,5 +1,5 @@
 <#
-.VERSION    4.4.3
+.VERSION    4.4.4
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -15,7 +15,7 @@
     When ParallelMode is enabled, this parameter controls how many VM deletions run concurrently. Default is 5.
 .RuntimeEnvironment PowerShell-7.2
 .NOTES
-    LASTEDIT: 20-03-2026
+    LASTEDIT: 25-03-2026
 #>
 
 param(
@@ -49,6 +49,9 @@ $VerbosePreference     = 'SilentlyContinue'
 $InformationPreference = 'Continue'
 
 #–– Time helpers ––
+
+# Runtime validation
+Write-Output "PSVersion: $($PSVersionTable.PSVersion)"
 function Format-LondonTime { param([datetime]$dt)
     $tzLondon = [System.TimeZoneInfo]::FindSystemTimeZoneById("GMT Standard Time")
     [System.TimeZoneInfo]::ConvertTime($dt, $tzLondon).ToString("dd/MM/yyyy HH:mm:ss")

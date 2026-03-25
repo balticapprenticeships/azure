@@ -1,5 +1,5 @@
 <#
-.VERSION    1.1.1
+.VERSION    1.1.2
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -21,7 +21,7 @@
 .RuntimeEnvironment PowerShell-7.2
 
 .NOTES
-    LASTEDIT: 18-03-2026
+    LASTEDIT: 25-03-2026
 #>
 
 param(
@@ -67,6 +67,9 @@ $ErrorActionPreference = 'Stop'
 $WarningPreference     = 'Continue'
 $VerbosePreference     = 'SilentlyContinue'
 $InformationPreference = 'Continue'
+
+# Runtime validation
+Write-Output "PSVersion: $($PSVersionTable.PSVersion)"
 
 #–– Teams webhook from Automation Variable if not provided ––
 if (-not $teamsWebhookUrl) {

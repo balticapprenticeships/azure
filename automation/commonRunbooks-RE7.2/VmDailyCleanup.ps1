@@ -1,5 +1,5 @@
 <#
-.VERSION    1.2.0
+.VERSION    1.2.1
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -16,7 +16,7 @@
 .PARAMETER ThrottleLimit
     When ParallelMode is enabled, this parameter controls how many VM deletions run concurrently. Default is 5.
 .NOTES
-    LASTEDIT: 24-03-2026
+    LASTEDIT: 25-03-2026
 #>
 
 param(
@@ -48,6 +48,10 @@ $ErrorActionPreference = 'Stop'
 $WarningPreference     = 'Continue'
 $VerbosePreference     = 'SilentlyContinue'
 $InformationPreference = 'Continue'
+
+
+# Runtime validation
+Write-Output "PSVersion: $($PSVersionTable.PSVersion)"
 
 #–– Time helpers ––
 function Format-LondonTime { param([datetime]$dt)
