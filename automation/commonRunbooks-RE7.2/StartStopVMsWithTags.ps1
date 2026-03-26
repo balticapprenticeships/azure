@@ -1,5 +1,5 @@
 <#
-.VERSION    2.2.1
+.VERSION    2.2.2
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -16,7 +16,7 @@
 .Parameter   MaxRetries The maximum number of retries for transient errors (default: 3).
 .RuntimeEnvironment PowerShell-7.2
 .NOTES
-    LASTEDIT    25.03.2026
+    LASTEDIT    26.03.2026
 #>
 
 param (
@@ -50,12 +50,12 @@ param (
     [switch]$WhatIf
 )
 
-# Convert portal string input to boolean
-if ($PSBoundParameters.ContainsKey('WhatIf')) {
-    $WhatIf = [bool]::Parse($WhatIf.ToString())
-} else {
-    $WhatIf = $false
-}
+# # Convert portal string input to boolean
+# if ($PSBoundParameters.ContainsKey('WhatIf')) {
+#     $WhatIf = [bool]::Parse($WhatIf.ToString())
+# } else {
+#     $WhatIf = $false
+# }
 
 # Runtime validation
 Write-Output "PSVersion: $($PSVersionTable.PSVersion)"
@@ -113,7 +113,7 @@ function Wait-ForVMState {
 }
 
 # Parallel execution returning structured objects
-$results = ForEach-Object -InputObject $filteredVMs -Parallel {
+$results = $filteredVMs | ForEach-Object -Parallel {
     param($vm,$Action,$TimeoutSeconds,$PollIntervalSeconds,$MaxRetries,$WhatIf)
 
     $vmName = $vm.Name
@@ -190,7 +190,7 @@ $cardBody = @(
         @{ title="Skipped"; value="$($skippedObjs.Count)" },
         @{ title="Failed"; value="$($failedObjs.Count)" },
         @{ title="WhatIf"; value="$($whatIfObjs.Count)" },
-        @{ title="Execution Time"; value="$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" }
+        @{ title="Execution Time"; value="$(Get-Date -Format 'dd-MM-yyy HH:mm:ss')" }
     )}
 )
 
@@ -206,7 +206,7 @@ $card = @{
     attachments=@(
         @{
             contentType="application/vnd.microsoft.card.adaptive"
-            content=@{ type="AdaptiveCard"; version="1.4"; body=$cardBody }
+            content=@{ type="AdaptiveCard"; version="1.5"; body=$cardBody; msteams=@{ width="Full" } }
         }
     )
 }
