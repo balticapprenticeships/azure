@@ -1,5 +1,5 @@
 <#
-.VERSION    2.2.2
+.VERSION    2.3.0
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -47,19 +47,27 @@ param (
     [string] $teamsWebhookUrl,
 
     [Parameter(Mandatory = $false)]
-    [switch]$WhatIf
-)
+    [bool]$WhatIf =$false,
 
-# # Convert portal string input to boolean
-# if ($PSBoundParameters.ContainsKey('WhatIf')) {
-#     $WhatIf = [bool]::Parse($WhatIf.ToString())
-# } else {
-#     $WhatIf = $false
-# }
+    [Parameter(Mandatory = $false)]
+    [int]$GlobalTimeoutSeconds = 3600,
+
+    # Idempotency lock tag
+    [Parameter(Mandatory = $false)]
+    [string]$LockTagName = "AutomationLock",
+
+    [Parameter(Mandatory = $false)]
+    [int]$LockExpiryMinutes = 30
+)
 
 # Runtime validation
 Write-Output "PSVersion: $($PSVersionTable.PSVersion)"
 
+# Throttle protection: cap parallelism to reduce ARM throttling risk
+$ThrottleLimit = [math]::Min($ThrottleLimit, 5)
+
+# Global deadline for per-VM cancellation
+$RunbookDeadline  = (Get-Date).AddSeconds($GlobalTimeoutSeconds)
 
 # Teams Webhook URL can be passed as a parameter or stored as an Automation Variable
 if (-not $teamsWebhookUrl) {
@@ -86,63 +94,222 @@ $filteredVMs = $vms | Where-Object {
     $_.Tags.ContainsKey($TagName) -and $_.Tags[$TagName] -eq $TagValue
 }
 
-# Retry helper
-function Invoke-WithRetry {
-    param ([scriptblock]$ScriptBlock, [int]$MaxRetries)
-    for ($i=0; $i -le $MaxRetries; $i++) {
-        try { return & $ScriptBlock }
-        catch {
-            if ($i -eq $MaxRetries) { throw $_ }
-            Start-Sleep -Seconds ([math]::Pow(2,$i))
-        }
-    }
-}
-
-# Wait for VM desired state
-function Wait-ForVMState {
-    param ([string]$ResourceGroup, [string]$VMName, [string]$DesiredState, [int]$TimeoutSeconds, [int]$PollIntervalSeconds)
-    $elapsed = 0
-    while ($elapsed -lt $TimeoutSeconds) {
-        $vmStatus = Get-AzVM -ResourceGroupName $ResourceGroup -Name $VMName -Status
-        $state = ($vmStatus.Statuses | Where-Object { $_.Code -like "PowerState/*" }).DisplayStatus
-        if ($state -eq $DesiredState) { return $true }
-        Start-Sleep -Seconds $PollIntervalSeconds
-        $elapsed += $PollIntervalSeconds
-    }
-    return $false
-}
-
 # Parallel execution returning structured objects
 $results = $filteredVMs | ForEach-Object -Parallel {
-    param($vm,$Action,$TimeoutSeconds,$PollIntervalSeconds,$MaxRetries,$WhatIf)
+    function Invoke-WithRetry {
+        param (
+            [scriptblock]$ScriptBlock,
+            [int]$MaxRetries
+        )
 
+        for ($i = 0; $i -le $MaxRetries; $i++) {
+            try {
+                return & $ScriptBlock
+            } catch {
+                if ($i -eq $MaxRetries) { throw }
+                Start-Sleep -Seconds ([math]::Min(60, [math]::Pow(2, $i) + (Get-Random -Minimum 1 -Maximum 5)))
+            }
+        }
+    }
+
+    function Wait-ForVMState {
+        param (
+            [string]$ResourceGroup,
+            [string]$VMName,
+            [string]$DesiredState,
+            [int]$TimeoutSeconds,
+            [int]$PollIntervalSeconds,
+            [datetime]$Deadline
+        )
+
+        $elapsed = 0
+        while ($elapsed -lt $TimeoutSeconds) {
+            if ((Get-Date) -gt $Deadline) { return $false }
+
+            $vmStatus = Get-AzVM -ResourceGroupName $ResourceGroup -Name $VMName -Status -ErrorAction Stop
+            $state = ($vmStatus.Statuses | Where-Object Code -like "PowerState/*").DisplayStatus
+            if ($state -eq $DesiredState) { return $true }
+
+            Start-Sleep -Seconds $PollIntervalSeconds
+            $elapsed += $PollIntervalSeconds
+        }
+        return $false
+    }
+
+
+    $vm = $_
     $vmName = $vm.Name
     $rg = $vm.ResourceGroupName
+    $vmId = $vm.Id
+
+    # Per-VM cancellation: skip work if global deadline exceeded
+    if ((Get-Date) -gt $using:RunbookDeadline) {
+        return [PSCustomObject]@{
+            VMName        = $vmName
+            ResourceGroup = $rg
+            Message       = "Runbook global timeout exceeded — VM skipped"
+            ResultType    = "Skipped"
+        }
+    }
+
+    # Determine current state (snapshot from initial Get-AzVM -Status)
     $currentState = ($vm.Statuses | Where-Object { $_.Code -like "PowerState/*" }).DisplayStatus
 
-    try {
-        if ($Action -eq "Start") {
-            if ($currentState -eq "VM running") { return [PSCustomObject]@{ VMName=$vmName; ResourceGroup=$rg; Message="$vmName ($rg) already running"; ResultType="Skipped" } }
-            if ($WhatIf) { return [PSCustomObject]@{ VMName=$vmName; ResourceGroup=$rg; Message="$vmName ($rg) would start"; ResultType="WhatIf" } }
-
-            Invoke-WithRetry { Start-AzVM -ResourceGroupName $rg -Name $vmName -NoWait } -MaxRetries $MaxRetries
-            $ok = Wait-ForVMState -ResourceGroup $rg -VMName $vmName -DesiredState "VM running" -TimeoutSeconds $TimeoutSeconds -PollIntervalSeconds $PollIntervalSeconds
-            if ($ok) { return [PSCustomObject]@{ VMName=$vmName; ResourceGroup=$rg; Message="$vmName ($rg) started successfully"; ResultType="Success" } }
-            else { return [PSCustomObject]@{ VMName=$vmName; ResourceGroup=$rg; Message="$vmName ($rg) timeout waiting for running state"; ResultType="Failed" } }
+    # If WhatIf, do not lock—just report intent
+    if ($using:WhatIf) {
+        if ($using:Action -eq "Start") {
+            $msg = if ($currentState -eq "VM running") { "$vmName ($rg) already running" } else { "$vmName ($rg) would start" }
+        } else {
+            $msg = if ($currentState -eq "VM deallocated") { "$vmName ($rg) already stopped" } else { "$vmName ($rg) would stop" }
         }
-        elseif ($Action -eq "Stop") {
-            if ($currentState -eq "VM deallocated") { return [PSCustomObject]@{ VMName=$vmName; ResourceGroup=$rg; Message="$vmName ($rg) already stopped"; ResultType="Skipped" } }
-            if ($WhatIf) { return [PSCustomObject]@{ VMName=$vmName; ResourceGroup=$rg; Message="$vmName ($rg) would stop"; ResultType="WhatIf" } }
 
-            Invoke-WithRetry { Stop-AzVM -ResourceGroupName $rg -Name $vmName -Force -NoWait } -MaxRetries $MaxRetries
-            $ok = Wait-ForVMState -ResourceGroup $rg -VMName $vmName -DesiredState "VM deallocated" -TimeoutSeconds $TimeoutSeconds -PollIntervalSeconds $PollIntervalSeconds
-            if ($ok) { return [PSCustomObject]@{ VMName=$vmName; ResourceGroup=$rg; Message="$vmName ($rg) stopped successfully"; ResultType="Success" } }
-            else { return [PSCustomObject]@{ VMName=$vmName; ResourceGroup=$rg; Message="$vmName ($rg) timeout waiting for stopped state"; ResultType="Failed" } }
+        return [PSCustomObject]@{
+            VMName        = $vmName
+            ResourceGroup = $rg
+            Message       = $msg
+            ResultType    = if ($msg -like "*already*") { "Skipped" } else { "WhatIf" }
         }
-    } catch {
-        return [PSCustomObject]@{ VMName=$vmName; ResourceGroup=$rg; Message="$vmName ($rg) error: $($_.Exception.Message)"; ResultType="Failed" }
     }
-} -ThrottleLimit $ThrottleLimit -ArgumentList $Action,$TimeoutSeconds,$PollIntervalSeconds,$MaxRetries,$WhatIf
+
+    # ----- Idempotency with auto-expiring lock tag -----
+    # Re-read tags from Azure to avoid stale $vm.Tags
+    try {
+        $res = Get-AzResource -ResourceId $vmId -ErrorAction Stop
+        $tags = $res.Tags
+    } catch {
+        return [PSCustomObject]@{
+            VMName        = $vmName
+            ResourceGroup = $rg
+            Message       = "$vmName ($rg) error reading tags: $($_.Exception.Message)"
+            ResultType    = "Failed"
+        }
+    }
+
+    $lockExists  = $false
+    $lockExpired = $false
+
+    if ($tags -and $tags.ContainsKey($using:LockTagName)) {
+        $lockExists = $true
+
+        $lockTime = $null
+        if ([datetime]::TryParse($tags[$using:LockTagName], [ref]$lockTime)) {
+            $age = (Get-Date).ToUniversalTime() - $lockTime.ToUniversalTime()
+            if ($age -gt [TimeSpan]::FromMinutes($using:LockExpiryMinutes)) {
+                $lockExpired = $true
+            }
+        } else {
+            # Unparsable lock value—treat as stale so it doesn't block forever
+            $lockExpired = $true
+        }
+    }
+
+    if ($lockExists -and -not $lockExpired) {
+        return [PSCustomObject]@{
+            VMName        = $vmName
+            ResourceGroup = $rg
+            Message       = "$vmName ($rg) is locked by another run (lock active) — skipped"
+            ResultType    = "Skipped"
+        }
+    }
+
+    # Acquire/overwrite lock (UTC ISO-8601)
+    $lockAcquired = $false
+    $lockValue = (Get-Date).ToUniversalTime().ToString("o")
+
+    try {
+        Update-AzTag -ResourceId $vmId -Tag @{ ($using:LockTagName) = $lockValue } -Operation Merge -ErrorAction Stop | Out-Null
+        $lockAcquired = $true
+
+        # Small jitter to spread ARM calls a bit
+        Start-Sleep -Milliseconds (Get-Random -Minimum 50 -Maximum 250)
+
+        if ($using:Action -eq "Start") {
+
+            if ($currentState -eq "VM running") {
+                return [PSCustomObject]@{
+                    VMName        = $vmName
+                    ResourceGroup = $rg
+                    Message       = "$vmName ($rg) already running"
+                    ResultType    = "Skipped"
+                }
+            }
+
+            Invoke-WithRetry {
+                Start-AzVM -ResourceGroupName $rg -Name $vmName -NoWait -ErrorAction Stop | Out-Null
+            } $using:MaxRetries
+
+            $ok = Wait-ForVMState `
+                $rg `
+                $vmName `
+                "VM running" `
+                $using:TimeoutSeconds `
+                $using:PollIntervalSeconds `
+                $using:RunbookDeadline
+
+            return [PSCustomObject]@{
+                VMName        = $vmName
+                ResourceGroup = $rg
+                Message       = if ($ok) { "$vmName ($rg) started successfully" } else { "$vmName ($rg) timeout waiting for running state" }
+                ResultType    = if ($ok) { "Success" } else { "Failed" }
+            }
+        }
+
+        if ($using:Action -eq "Stop") {
+
+            if ($currentState -eq "VM deallocated") {
+                return [PSCustomObject]@{
+                    VMName        = $vmName
+                    ResourceGroup = $rg
+                    Message       = "$vmName ($rg) already stopped"
+                    ResultType    = "Skipped"
+                }
+            }
+
+            Invoke-WithRetry {
+                Stop-AzVM -ResourceGroupName $rg -Name $vmName -Force -NoWait -ErrorAction Stop | Out-Null
+            } $using:MaxRetries
+
+            $ok = Wait-ForVMState `
+                $rg `
+                $vmName `
+                "VM deallocated" `
+                $using:TimeoutSeconds `
+                $using:PollIntervalSeconds `
+                $using:RunbookDeadline
+
+            return [PSCustomObject]@{
+                VMName        = $vmName
+                ResourceGroup = $rg
+                Message       = if ($ok) { "$vmName ($rg) stopped successfully" } else { "$vmName ($rg) timeout waiting for stopped state" }
+                ResultType    = if ($ok) { "Success" } else { "Failed" }
+            }
+        }
+
+        return [PSCustomObject]@{
+            VMName        = $vmName
+            ResourceGroup = $rg
+            Message       = "$vmName ($rg) unknown action: $($using:Action)"
+            ResultType    = "Failed"
+        }
+
+    } catch {
+        return [PSCustomObject]@{
+            VMName        = $vmName
+            ResourceGroup = $rg
+            Message       = "$vmName ($rg) error: $($_.Exception.Message)"
+            ResultType    = "Failed"
+        }
+    } finally {
+        if ($lockAcquired) {
+            try {
+                Update-AzTag -ResourceId $vmId -Tag @{ ($using:LockTagName) = "" } -Operation Delete -ErrorAction Stop | Out-Null
+            } catch {
+                Write-Output "WARN: Failed to remove lock tag from $vmName ($rg): $($_.Exception.Message)"
+            }
+        }
+    }
+
+} -ThrottleLimit $ThrottleLimit
 
 # Helper to group VMs by Resource Group
 function Group-VMsByRG {
@@ -211,7 +378,7 @@ $card = @{
     )
 }
 
-Invoke-RestMethod -Method Post -Uri $TeamsWebhookUrl -Body ($card | ConvertTo-Json -Depth 10) -ContentType "application/json"
+Invoke-RestMethod -Method Post -Uri $teamsWebhookUrl -Body ($card | ConvertTo-Json -Depth 10) -ContentType "application/json"
 
 # Output structured results
 [PSCustomObject]@{
