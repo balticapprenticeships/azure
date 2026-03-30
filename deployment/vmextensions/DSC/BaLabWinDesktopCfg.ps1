@@ -1,7 +1,7 @@
 ################################################################
 # Script to configure Windows lab environment using DSC        #
 # Author: Chris Langford                                       #
-# Version: 7.0.0                                               #
+# Version: 7.0.1                                               #
 ################################################################
 
 Configuration BaWinDesktopLabCfg {
@@ -331,12 +331,7 @@ Configuration BaDataLevel4LabCfg {
         [Parameter(Mandatory = $true)]
         [System.Management.Automation.PSCredential]
         [System.Management.Automation.Credential()]
-        $Credential,
-
-        [Parameter(Mandatory = $true)]
-        [System.Management.Automation.PSCredential]
-        [System.Management.Automation.Credential()]
-        $PGPassword
+        $Credential
     )
 
     Import-DscResource -ModuleName ComputerManagementDsc, PSDesiredStateConfiguration
