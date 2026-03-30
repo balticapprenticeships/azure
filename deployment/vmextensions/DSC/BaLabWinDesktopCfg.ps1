@@ -405,7 +405,6 @@ Configuration BaDataLevel4LabCfg {
                     python -m pip install $module
                 }
             }
-            DependsOn = "[Script]CheckPythonInstallation"
         }
 
         # This resource block ensures that the file or command is executed
