@@ -1,5 +1,5 @@
 <#
-.VERSION    2.3.0
+.VERSION    2.3.1
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -47,9 +47,6 @@ param (
     [string] $teamsWebhookUrl,
 
     [Parameter(Mandatory = $false)]
-    [bool]$WhatIf =$false,
-
-    [Parameter(Mandatory = $false)]
     [int]$GlobalTimeoutSeconds = 3600,
 
     # Idempotency lock tag
@@ -57,7 +54,10 @@ param (
     [string]$LockTagName = "AutomationLock",
 
     [Parameter(Mandatory = $false)]
-    [int]$LockExpiryMinutes = 30
+    [int]$LockExpiryMinutes = 30,
+
+    [Parameter(Mandatory = $false)]
+    [bool]$WhatIf =$false
 )
 
 # Runtime validation
