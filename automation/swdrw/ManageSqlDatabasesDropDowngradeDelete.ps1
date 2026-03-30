@@ -1,5 +1,5 @@
 <#
-.VERSION    1.1.2
+.VERSION    2.0.0
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -18,10 +18,11 @@
 .PARAMETER  DatabaseNamePattern - Wildcard pattern that database names must match to be considered for any action.
 .PARAMETER  teamsWebhookUrl - Optional Microsoft Teams webhook URL for sending the summary report. If not provided, it will attempt to retrieve from an Automation Variable.
 .PARAMETER  WhatIf - If true, simulates the actions without making any changes. Set to false to perform actual operations.
-.RuntimeEnvironment PowerShell-7.2
+.RuntimeEnvironment PowerShell-7.4
 
 .NOTES
-    LASTEDIT: 25-03-2026
+    LASTEDIT: 30-03-2026
+    Custom runtime environment specified to ensure compatibility with latest Az modules and features.
 #>
 
 param(
@@ -90,6 +91,9 @@ $ukTimeZone = [System.TimeZoneInfo]::FindSystemTimeZoneById("GMT Standard Time")
 # ------------------------------------------------
 # Authenticate
 # ------------------------------------------------
+Import-Module Az.ResourceGraph -Force
+Import-Module Az.Accounts -Force
+
 try {
     Connect-AzAccount -Identity
     Write-Information "Azure authentication succeeded." -Tags Authentication
@@ -99,6 +103,10 @@ catch { Write-Error "Authentication failed: $_"; Stop-Transcript; throw }
 # Get current Azure subscription name
 $subscriptionId = (Get-AzContext).Subscription.Id
 $subscriptionName = (Get-AzSubscription).Subscription.Name
+
+$test = Search-AzGraph -Query "resourcecontainers | limit 1"
+Write-Output "Resource Graph test returned $($test.Count) rows"
+
 
 #–– Exit if cleanup not enabled ––
 if (-not $cleanupEnabled) {
@@ -118,13 +126,20 @@ Resources
 | where type == 'microsoft.sql/servers/databases'
 | where subscriptionId == '$subscriptionId'
 | where name != 'master'
-| where name contains '$DatabaseNamePattern'
 | project name, resourceGroup, subscriptionId, tags, sku, id
 "@
 
 Write-Output "Querying Azure Resource Graph"
 
-$databases = Search-AzGraph -Query $query -First 5000
+$databases = Search-AzGraph -Query $query -First 1000 | ForEach-Object {
+    [PSCustomObject]@{
+        name = $_.name
+        resourceGroup = $_.resourceGroup
+        id = $_.id
+        tags = $_.tags
+        sku = $_.sku
+    }
+}
 
 $totalDatabases = $databases.Count
 
@@ -154,43 +169,46 @@ $errorCounter = [System.Collections.Concurrent.ConcurrentBag[object]]::new()
 
 $databases | ForEach-Object -Parallel {
 
-    param(
-        $DeleteTagName,
-        $DeleteTagValue,
-        $DowngradeToBasic,
-        $DeleteBasicDatabases,
-        $ExcludeTagPatterns,
-        $DatabaseNamePattern,
-        $WhatIf,
-        $results,
-        $errorCounter
-    )
-
     $db = $_
-    $server = ($db.id -split "/")[8]
+
+    # Bring variables into scope
+    $DeleteTagName        = $using:DeleteTagName
+    $DeleteTagValue       = $using:DeleteTagValue
+    $DowngradeToBasic     = $using:DowngradeToBasic
+    $DeleteBasicDatabases = $using:DeleteBasicDatabases
+    $ExcludeTagPatterns   = $using:ExcludeTagPatterns
+    $DatabaseNamePattern  = $using:DatabaseNamePattern
+    $WhatIf               = $using:WhatIf
+    $results              = $using:results
+    $errorCounter         = $using:errorCounter
 
     $action = "Skipped"
     $reason = ""
     $errorMessage = ""
 
     try {
+        # Robust server extraction
+        $segments = $db.id -split "/" | Where-Object { $_ }
+        $server = $segments[7]
+
+        # Validate critical params
+        if (-not $db.resourceGroup -or -not $server -or -not $db.name) {
+            throw "Invalid parameters: RG=[$($db.resourceGroup)] Server=[$server] DB=[$($db.name)]"
+        }
 
         # ------------------------------------------------
         # DATABASE NAME VALIDATION
         # ------------------------------------------------
 
         if ($db.name -notlike $DatabaseNamePattern) {
-
-            $reason = "Name does not match required pattern"
-
-            $results.Add([PSCustomObject]@{
-                Database = $db.name
-                Server = $server
-                Action = $action
-                Reason = $reason
-                ErrorMessage = $errorMessage
+            $reason = "Name does not match pattern"
+            $results.Add([PSCustomObject]@{ 
+                Database=$db.name 
+                Server=$server 
+                Action=$action 
+                Reason=$reason
+                ErrorMessage=$errorMessage 
             })
-
             return
         }
 
@@ -198,33 +216,22 @@ $databases | ForEach-Object -Parallel {
         # TAG EXCLUSION RULES
         # ------------------------------------------------
 
-        $tags = $db.tags
-
-        if ($tags) {
-
+        if ($db.tags) {
             foreach ($pattern in $ExcludeTagPatterns) {
-
-                foreach ($key in $tags.Keys) {
-
+                foreach ($key in $db.tags.Keys) {
                     if ($key -like $pattern) {
-
-                        $reason = "Excluded by tag pattern"
-
-                        $results.Add([PSCustomObject]@{
-                            Database = $db.name
-                            Server = $server
-                            Action = $action
-                            Reason = $reason
-                            ErrorMessage = $errorMessage
+                        $reason = "Excluded by tag"
+                        $results.Add([PSCustomObject]@{ 
+                            Database=$db.name 
+                            Server=$server 
+                            Action=$action 
+                            Reason=$reason 
+                            ErrorMessage=$errorMessage 
                         })
-
                         return
                     }
-
                 }
-
             }
-
         }
 
         $edition = $db.sku.name
@@ -233,23 +240,18 @@ $databases | ForEach-Object -Parallel {
         # DELETE BY TAG
         # ------------------------------------------------
 
-        if ($DeleteTagName) {
+        if ($DeleteTagName -and $db.tags.ContainsKey($DeleteTagName) -and $db.tags[$DeleteTagName] -eq $DeleteTagValue) {
 
-            if ($tags.ContainsKey($DeleteTagName) -and $tags[$DeleteTagName] -eq $DeleteTagValue) {
-
-                if (-not $WhatIf) {
-
-                    Remove-AzSqlDatabase `
-                        -ResourceGroupName $db.resourceGroup `
-                        -ServerName $server `
-                        -DatabaseName $db.name `
-                        -Force
-
-                }
-
-                $action = "Deleted"
+            if (-not $WhatIf) {
+                Remove-AzSqlDatabase \
+                    -ResourceGroupName $db.resourceGroup \
+                    -ServerName $server \
+                    -DatabaseName $db.name \
+                    -Force \
+                    -ErrorAction Stop
             }
 
+            $action = "Deleted"
         }
 
         # ------------------------------------------------
@@ -259,13 +261,12 @@ $databases | ForEach-Object -Parallel {
         elseif ($DeleteBasicDatabases -and $edition -eq "Basic") {
 
             if (-not $WhatIf) {
-
-                Remove-AzSqlDatabase `
-                    -ResourceGroupName $db.resourceGroup `
-                    -ServerName $server `
-                    -DatabaseName $db.name `
-                    -Force
-
+                Remove-AzSqlDatabase \
+                    -ResourceGroupName $db.resourceGroup \
+                    -ServerName $server \
+                    -DatabaseName $db.name \
+                    -Force \
+                    -ErrorAction Stop
             }
 
             $action = "Deleted"
@@ -278,31 +279,24 @@ $databases | ForEach-Object -Parallel {
         elseif ($DowngradeToBasic -and $edition -ne "Basic") {
 
             if (-not $WhatIf) {
-
-                Set-AzSqlDatabase `
-                    -ResourceGroupName $db.resourceGroup `
-                    -ServerName $server `
-                    -DatabaseName $db.name `
-                    -Edition Basic
-
+                Set-AzSqlDatabase \
+                    -ResourceGroupName $db.resourceGroup \
+                    -ServerName $server \
+                    -DatabaseName $db.name \
+                    -Edition Basic \
+                    -ErrorAction Stop
             }
 
             $action = "Downgraded"
         }
-
         else {
-
             $reason = "No matching rule"
-
         }
-
     }
     catch {
-
         $action = "Error"
         $errorMessage = $_.Exception.Message
         $errorCounter.Add($errorMessage)
-
     }
 
     $results.Add([PSCustomObject]@{
@@ -313,16 +307,7 @@ $databases | ForEach-Object -Parallel {
         ErrorMessage = $errorMessage
     })
 
-} -ThrottleLimit $ThrottleLimit -ArgumentList `
-$DeleteTagName,
-$DeleteTagValue,
-$DowngradeToBasic,
-$DeleteBasicDatabases,
-$ExcludeTagPatterns,
-$DatabaseNamePattern,
-$WhatIf,
-$results,
-$errorCounter
+} -ThrottleLimit $ThrottleLimit 
 
 
 # ------------------------------------------------
@@ -333,13 +318,6 @@ $deleted = ($results | Where-Object Action -eq "Deleted").Count
 $downgraded = ($results | Where-Object Action -eq "Downgraded").Count
 $skipped = ($results | Where-Object Action -eq "Skipped").Count
 $errors = $results | Where-Object Action -eq "Error"
-
-$runEndTime = Get-Date
-$duration = $runEndTime - $runStartTime
-
-$runStartString = $runStartTime.ToString("dd-mm-yyyy HH:mm:ss")
-$runEndString = $runEndTime.ToString("dd-mm-yyyy HH:mm:ss")
-$durationString = "{0:hh\:mm\:ss}" -f $duration
 
 # ------------------------------------------------
 # Catastrophic Deletion Safeguard
@@ -357,8 +335,12 @@ if ($deleted -gt 50 -or $deleted -gt ($totalDatabases * 0.2)) {
 # ------------------------------------------------
 $runEndTimeUtc = Get-Date
 
-$runStartUK = [System.TimeZoneInfo]::ConvertTimeFromUtc($runStartTimeUtc, $ukTimeZone)
-$runEndUK = [System.TimeZoneInfo]::ConvertTimeFromUtc($runEndTimeUtc, $ukTimeZone)
+$runStartUK = [DateTime]::UtcNow
+$runEndUK = [DateTime]::UtcNow
+
+if (-not $runStartTimeUtc -or -not $runEndTimeUtc) {
+    throw "Invalid time values for duration calculation"
+}
 
 $duration = $runEndTimeUtc - $runStartTimeUtc
 
@@ -388,6 +370,9 @@ if ($teamsWebhookUrl) {
                 content = @{
                     type = "AdaptiveCard"
                     version = "1.4"
+                    msteams = @{
+                        width = "Full"
+                    }
                     body = @(
                         @{
                             type = "TextBlock"
