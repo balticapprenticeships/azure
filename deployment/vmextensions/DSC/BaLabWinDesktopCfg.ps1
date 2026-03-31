@@ -21,11 +21,14 @@ Configuration BaWinDesktopLabCfg {
             RebootNodeIfNeeded = $true
         }
 
+        # Construct fully-qualified local username
+        $localUser = "$env:COMPUTERNAME\$($Credential.UserName)"
+
         # This resource block creates a local User
         User "CreateUserAccount"
         {
             Ensure = "Present"
-            UserName = Split-Path -Path $Credential.Username -Leaf
+            UserName = $Credential.Username
             Password = $Credential
             FullName = "Baltic Apprentice"
             Description = "Baltic Apprentice User Account"
@@ -35,20 +38,11 @@ Configuration BaWinDesktopLabCfg {
         }
 
         # This resource block adds a user to specific groups
-        Group "AddToUserGroup"
-        {
-            Ensure = "Present"
-            GroupName = "Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
-            DependsOn = "[User]CreateUserAccount"
-        }
-
-        # This resource block adds a user to specific groups
         Group "AddToRemoteDesktopUserGroup"
         {
             Ensure = "Present"
             GroupName = "Remote Desktop Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
+            MembersToInclude = @($localUser)
             DependsOn = "[User]CreateUserAccount"
         }        
         
@@ -85,11 +79,14 @@ Configuration BaDataBootCampLabCfg {
             RebootNodeIfNeeded = $true
         }
 
+        # Construct fully-qualified local username
+        $localUser = "$env:COMPUTERNAME\$($Credential.UserName)"
+
         # This resource block creates a local User
         User "CreateUserAccount"
         {
             Ensure = "Present"
-            UserName = Split-Path -Path $Credential.Username -Leaf
+            UserName = $Credential.Username
             Password = $Credential
             FullName = "Baltic Apprentice"
             Description = "Baltic Apprentice User Account"
@@ -99,20 +96,11 @@ Configuration BaDataBootCampLabCfg {
         }
 
         # This resource block adds a user to specific groups
-        Group "AddToUserGroup"
-        {
-            Ensure = "Present"
-            GroupName = "Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
-            DependsOn = "[User]CreateUserAccount"
-        }
-
-        # This resource block adds a user to specific groups
         Group "AddToRemoteDesktopUserGroup"
         {
             Ensure = "Present"
             GroupName = "Remote Desktop Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
+            MembersToInclude = @($localUser)
             DependsOn = "[User]CreateUserAccount"
         }        
         
@@ -149,11 +137,14 @@ Configuration BaExamImageLabCfg {
             RebootNodeIfNeeded = $true
         }
 
+        # Construct fully-qualified local username
+        $localUser = "$env:COMPUTERNAME\$($Credential.UserName)"
+
         # This resource block creates a local User
         User "CreateUserAccount"
         {
             Ensure = "Present"
-            UserName = Split-Path -Path $Credential.Username -Leaf
+            UserName = $Credential.Username
             Password = $Credential
             FullName = "Baltic Apprentice"
             Description = "Baltic Apprentice User Account"
@@ -163,20 +154,11 @@ Configuration BaExamImageLabCfg {
         }
 
         # This resource block adds a user to specific groups
-        Group "AddToUserGroup"
-        {
-            Ensure = "Present"
-            GroupName = "Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
-            DependsOn = "[User]CreateUserAccount"
-        }
-
-        # This resource block adds a user to specific groups
         Group "AddToRemoteDesktopUserGroup"
         {
             Ensure = "Present"
             GroupName = "Remote Desktop Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
+            MembersToInclude = @($localUser)
             DependsOn = "[User]CreateUserAccount"
         }        
         
@@ -213,11 +195,14 @@ Configuration BaExamTestingLabCfg {
             RebootNodeIfNeeded = $true
         }
 
+        # Construct fully-qualified local username
+        $localUser = "$env:COMPUTERNAME\$($Credential.UserName)"
+
         # This resource block creates a local User
         User "CreateUserAccount"
         {
             Ensure = "Present"
-            UserName = Split-Path -Path $Credential.Username -Leaf
+            UserName = $Credential.Username
             Password = $Credential
             FullName = "Baltic Apprentice"
             Description = "Baltic Apprentice User Account"
@@ -225,22 +210,12 @@ Configuration BaExamTestingLabCfg {
             PasswordChangeRequired = $false
             PasswordChangeNotAllowed = $true
         }
-
-        # This resource block adds a user to specific groups
-        Group "AddToUserGroup"
-        {
-            Ensure = "Present"
-            GroupName = "Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
-            DependsOn = "[User]CreateUserAccount"
-        }
-
         # This resource block adds a user to specific groups
         Group "AddToRemoteDesktopUserGroup"
         {
             Ensure = "Present"
             GroupName = "Remote Desktop Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
+            MembersToInclude = @($localUser)
             DependsOn = "[User]CreateUserAccount"
         }        
         
@@ -277,11 +252,14 @@ Configuration BaDataLevel3LabCfg {
             RebootNodeIfNeeded = $true
         }
 
+        # Construct fully-qualified local username
+        $localUser = "$env:COMPUTERNAME\$($Credential.UserName)"
+
         # This resource block creates a local User
         User "CreateUserAccount"
         {
             Ensure = "Present"
-            UserName = Split-Path -Path $Credential.Username -Leaf
+            UserName = $Credential.Username
             Password = $Credential
             FullName = "Baltic Apprentice"
             Description = "Baltic Apprentice User Account"
@@ -291,20 +269,11 @@ Configuration BaDataLevel3LabCfg {
         }
 
         # This resource block adds a user to specific groups
-        Group "AddToUserGroup"
-        {
-            Ensure = "Present"
-            GroupName = "Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
-            DependsOn = "[User]CreateUserAccount"
-        }
-
-        # This resource block adds a user to specific groups
         Group "AddToRemoteDesktopUserGroup"
         {
             Ensure = "Present"
             GroupName = "Remote Desktop Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
+            MembersToInclude = @($localUser)
             DependsOn = "[User]CreateUserAccount"
         }        
         
@@ -341,11 +310,14 @@ Configuration BaDataLevel4LabCfg {
             RebootNodeIfNeeded = $true
         }
 
+        # Construct fully-qualified local username
+        $localUser = "$env:COMPUTERNAME\$($Credential.UserName)"
+
         # This resource block creates a local User
         User "CreateUserAccount"
         {
             Ensure = "Present"
-            UserName = Split-Path -Path $Credential.Username -Leaf
+            UserName = $Credential.UserName
             Password = $Credential
             FullName = "Baltic Apprentice"
             Description = "Baltic Apprentice User Account"
@@ -355,20 +327,11 @@ Configuration BaDataLevel4LabCfg {
         }
 
         # This resource block adds a user to specific groups
-        Group "AddToUserGroup"
-        {
-            Ensure = "Present"
-            GroupName = "Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
-            DependsOn = "[User]CreateUserAccount"
-        }
-
-        # This resource block adds a user to specific groups
         Group "AddToRemoteDesktopUserGroup"
         {
             Ensure = "Present"
             GroupName = "Remote Desktop Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
+            MembersToInclude = @($localUser)
             DependsOn = "[User]CreateUserAccount"
         }
 
@@ -381,13 +344,13 @@ Configuration BaDataLevel4LabCfg {
             TestScript = { 
                 $pythonInstalled = Get-Command python -ErrorAction SilentlyContinue
                 if (-not $pythonInstalled) {
-                    return $true # If Python is not installed, we consider the test as passed to trigger the SetScript to install Python first
+                    return $false # Python is not installed, we consider the test as passed to trigger the SetScript to install Python first
                 }
                 $requiredModules = @("numpy", "pandas", "scikit-learn", "statsmodels", "matplotlib", "seaborn", "scipy")
                 foreach ($module in $requiredModules) 
                 {
                     $installed = python -m pip show $module 2>&1
-                    if (-not $installed -ne 0) {
+                    if (-not $installed) {
                         return $false
                     }
                 }
@@ -440,11 +403,14 @@ Configuration BaDataLevel4SqlLabCfg {
             RebootNodeIfNeeded = $true
         }
 
+        # Construct fully-qualified local username
+        $localUser = "$env:COMPUTERNAME\$($Credential.UserName)"
+
         # This resource block creates a local User
         User "CreateUserAccount"
         {
             Ensure = "Present"
-            UserName = Split-Path -Path $Credential.Username -Leaf
+            UserName = $Credential.Username
             Password = $Credential
             FullName = "Baltic Apprentice"
             Description = "Baltic Apprentice User Account"
@@ -454,20 +420,11 @@ Configuration BaDataLevel4SqlLabCfg {
         }
 
         # This resource block adds a user to specific groups
-        Group "AddToUserGroup"
-        {
-            Ensure = "Present"
-            GroupName = "Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
-            DependsOn = "[User]CreateUserAccount"
-        }
-
-        # This resource block adds a user to specific groups
         Group "AddToAdministratorGroup"
         {
             Ensure = "Present"
             GroupName = "Administrators"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
+            MembersToInclude = @($localUser)
             DependsOn = "[User]CreateUserAccount"
         }        
 
@@ -476,7 +433,7 @@ Configuration BaDataLevel4SqlLabCfg {
         {
             Ensure = "Present"
             GroupName = "Remote Desktop Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
+            MembersToInclude = @($localUser)
             DependsOn = "[User]CreateUserAccount"
         }
         
@@ -487,7 +444,7 @@ Configuration BaDataLevel4SqlLabCfg {
             Features = 'SQLENGINE'
             SourcePath = 'C:\sqlBuildArtifacts\SQLServer2022-Dev'
             SQLCollation = 'Latin1_General_CI_AS'
-            SQLSysAdminAccounts = @('Administrators', (Split-Path -Path $Credential.Username -Leaf))
+            SQLSysAdminAccounts = @('Administrators', $localUser)
             InstallSharedDir = 'C:\Program Files\Microsoft SQL Server'
             InstallSharedWOWDir = 'C:\Program Files (x86)\Microsoft SQL Server'
             InstanceDir = 'C:\Program Files\Microsoft SQL Server'
@@ -566,11 +523,14 @@ Configuration BaSWAPC5LabCfg {
             RebootNodeIfNeeded = $true
         }
 
+        # Construct fully-qualified local username
+        $localUser = "$env:COMPUTERNAME\$($Credential.UserName)"
+
         # This resource block creates a local User
         User "CreateUserAccount"
         {
             Ensure = "Present"
-            UserName = Split-Path -Path $Credential.Username -Leaf
+            UserName = $Credential.Username
             Password = $Credential
             FullName = "Baltic Apprentice"
             Description = "Baltic Apprentice User Account"
@@ -578,22 +538,12 @@ Configuration BaSWAPC5LabCfg {
             PasswordChangeRequired = $false
             PasswordChangeNotAllowed = $true
         }
-
-        # This resource block adds a user to specific groups
-        Group "AddToUserGroup"
-        {
-            Ensure = "Present"
-            GroupName = "Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
-            DependsOn = "[User]CreateUserAccount"
-        }
-
         # This resource block adds a user to specific groups
         Group "AddToRemoteDesktopUserGroup"
         {
             Ensure = "Present"
             GroupName = "Remote Desktop Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
+            MembersToInclude = @($localUser)
             DependsOn = "[User]CreateUserAccount"
         }        
         
@@ -630,11 +580,14 @@ Configuration BaSWAPC5UE5LabCfg {
             RebootNodeIfNeeded = $true
         }
 
+        # Construct fully-qualified local username
+        $localUser = "$env:COMPUTERNAME\$($Credential.UserName)"
+
         # This resource block creates a local User
         User "CreateUserAccount"
         {
             Ensure = "Present"
-            UserName = Split-Path -Path $Credential.Username -Leaf
+            UserName = $Credential.Username
             Password = $Credential
             FullName = "Baltic Apprentice"
             Description = "Baltic Apprentice User Account"
@@ -644,20 +597,11 @@ Configuration BaSWAPC5UE5LabCfg {
         }
 
         # This resource block adds a user to specific groups
-        Group "AddToUserGroup"
-        {
-            Ensure = "Present"
-            GroupName = "Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
-            DependsOn = "[User]CreateUserAccount"
-        }
-
-        # This resource block adds a user to specific groups
         Group "AddToRemoteDesktopUserGroup"
         {
             Ensure = "Present"
             GroupName = "Remote Desktop Users"
-            MembersToInclude = Split-Path -Path $Credential.Username -Leaf
+            MembersToInclude = @($localUser)
             DependsOn = "[User]CreateUserAccount"
         }        
         
