@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.4.0",
+    "contentVersion": "4.0.4.1",
     "parameters": {
         "location": {
             "type": "string"
@@ -119,7 +119,7 @@
                 "galleryImageDefinitionName": "BA-DataCourses"
             },           
             "DataLevel4": {
-                "galleryImageDefinitionName": "BA-DataCoursesV2"
+                "galleryImageDefinitionName": "BA-DataCourses-V2"
             },
             "DataLevel4Sql": {
                 "galleryImageDefinitionName": "BA-DataCourses"
