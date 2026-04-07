@@ -1,5 +1,5 @@
 <#
-.VERSION    5.0.0
+.VERSION    5.1.0
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -226,7 +226,7 @@ Write-Information "Cleanup completed at $($global:cleanupResults.EndTimeStr) (Du
 
 Stop-Transcript
 
-#–– Teams Adaptive Card ––
+#–– Teams Adaptive Card with per-RG summary ––
 if ($teamsWebhookUrl) {
 
     $resourcesByRG = @{}
@@ -244,21 +244,34 @@ if ($teamsWebhookUrl) {
         if ($items.Count -gt 0) {
             $itemList = $items | ForEach-Object { @{ type="TextBlock"; text="• $_"; wrap=$true; spacing="None" } }
             $toggleId = ($title -replace '[^0-9a-zA-Z]','') + "_toggle_$([guid]::NewGuid().ToString('N'))"
-            return @{ type="Container"; items=@(@{ type="ActionSet"; actions=@(@{ type="Action.ToggleVisibility"; title=$title; target=@(@{ elementId=$toggleId }) }) }, @{ type="Container"; id=$toggleId; isVisible=$false; items=$itemList; style=$color }) }
+            return @{ type="Container"; items=@(
+                @{ type="ActionSet"; actions=@(@{ type="Action.ToggleVisibility"; title=$title; target=@(@{ elementId=$toggleId }) }) },
+                @{ type="Container"; id=$toggleId; isVisible=$false; items=$itemList; style=$color }
+            ) }
         }
         return $null
     }
 
-    $cardBody=@(@{ type="TextBlock"; text="Azure VM Cleanup Report for subscription $subscriptionName"; weight="Bolder"; size="Large" })
+    $cardBody=@(@{ type="TextBlock"; text="**Azure VM Cleanup Report for subscription $subscriptionName**"; weight="Bolder"; size="Large" })
+
     foreach ($rg in $resourcesByRG.Keys | Sort-Object) {
         $rgData = $resourcesByRG[$rg]
         $removedCount = $rgData.VMs.Removed.Count
         $skippedCount = $rgData.VMs.Skipped.Count
         $failedCount  = $rgData.VMs.Failed.Count
+
+        #–– Summary line for RG ––
+        $summaryText = "Resource Group: $rg — ✅Removed: $removedCount | ⚠️Skipped: $skippedCount | ❌Failed: $failedCount"
+        $cardBody += @{ type="TextBlock"; text=$summaryText; weight="Bolder"; wrap=$true; spacing="Small" }
+
+        #–– Collapsible details ––
         $rgColor = if ($failedCount -gt 0) {"Attention"} elseif ($skippedCount -gt 0) {"Warning"} else {"Good"}
-        $rgTitle = "Resource Group: $rg (✅$removedCount | ⚠️$skippedCount | ❌$failedCount)"
+        $rgTitle = "Details for $rg"
         $rgSectionItems=@()
-        foreach ($status in @('Removed','Skipped','Failed')) { $emoji = switch ($status) {"Removed"{"✅"}"Skipped"{"⚠️"}"Failed"{"❌"}}; foreach ($item in $rgData.VMs[$status]) { $rgSectionItems += "$emoji VM: $item" } }
+        foreach ($status in @('Removed','Skipped','Failed')) { 
+            $emoji = switch ($status) {"Removed"{"✅"}"Skipped"{"⚠️"}"Failed"{"❌"}} 
+            foreach ($item in $rgData.VMs[$status]) { $rgSectionItems += "$emoji VM: $item" } 
+        }
         if ($rgSectionItems.Count -gt 0) { $cardBody += Add-CollapsibleSection -title $rgTitle -items $rgSectionItems -color $rgColor }
     }
 
