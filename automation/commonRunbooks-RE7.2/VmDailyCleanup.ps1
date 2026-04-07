@@ -1,5 +1,5 @@
 <#
-.VERSION    1.4.0
+.VERSION    1.5.1
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -63,6 +63,11 @@ if (-not $teamsWebhookUrl) {
     try { $teamsWebhookUrl = Get-AutomationVariable -Name 'TeamsWebhookUrlDailyCleanup' } catch {Write-Verbose "No Teams webhook URL provided or found."}
 }
 
+#–– Start Transcript ––
+$transcriptTime = (Get-LondonTime (Get-Date)).ToString("ddMMyyyy_HHmmss")
+$transcript = Join-Path $env:TEMP "DailyCleanupRun_$transcriptTime.txt"
+Start-Transcript -Path $transcript -Force
+
 $global:cleanupResults = @{
     StartTime      = Get-Date
     StartTimeStr   = Format-LondonTime (Get-Date)
@@ -79,12 +84,33 @@ $global:cleanupResults = @{
     FailedVMsRGs   = @()
 }
 
-#–– Authenticate ––
+#–– Authenticate and select subscription ––
 try {
     Connect-AzAccount -Identity
-    Write-Information "Azure authentication succeeded." -Tags Authentication
+
+    # Pick the subscription automatically
+    $context = Get-AzContext
+
+    if (-not $context.Subscription) {
+        $allSubs = Get-AzSubscription
+        if ($allSubs.Count -eq 1) {
+            Set-AzContext -SubscriptionId $allSubs[0].Id
+        } else {
+            # Pick first subscription in tenant
+            $sub = $allSubs | Where-Object { $_.TenantId -eq $context.Tenant.Id } | Select-Object -First 1
+            if ($sub) { Set-AzContext -SubscriptionId $sub.Id }
+            else { Set-AzContext -SubscriptionId $allSubs[0].Id }
+        }
+    }
+
+    # Assign once for use throughout runbook
+    $subscriptionName = (Get-AzContext).Subscription.Name
+    Write-Output "Runbook executing in subscription: $subscriptionName"
+
+} catch {
+    Write-Error "Authentication or subscription selection failed: $_"
+    throw
 }
-catch { Write-Error "Authentication failed: $_"; Stop-Transcript; throw }
 
 # Get current Azure subscription name
 $subscriptionName = (Get-AzContext).Subscription.Name
@@ -178,7 +204,9 @@ $global:cleanupResults.EndTime  = Get-Date
 $global:cleanupResults.EndTimeStr = Format-LondonTime $global:cleanupResults.EndTime
 $global:cleanupResults.Duration = [math]::Round((New-TimeSpan -Start $global:cleanupResults.StartTime -End $global:cleanupResults.EndTime).TotalMinutes, 2)
 
-# Teams Adaptive Card (VM-only, grouped by RG)
+Stop-Transcript
+
+#–– Teams Adaptive Card (VM-only, grouped by RG) ––
 if ($teamsWebhookUrl) {
 
     $resourcesByRG = @{}
@@ -236,8 +264,10 @@ if ($teamsWebhookUrl) {
         return $null
     }
 
+    # Card body
     $cardBody = @(
-        @{ type="TextBlock"; text="Azure VM Cleanup Report ($subscriptionName)"; weight="Bolder"; size="Large" },
+        @{ type="TextBlock"; text="Azure VM Daily Cleanup Report for ($subscriptionName)"; weight="Bolder"; size="Large" },
+        @{ type="TextBlock"; text="Runbook Mode: $(if ($WhatIf) { 'Safe Mode / WhatIf' } else { 'Actual Cleanup' })"; wrap=$true },
         @{ type="FactSet"; facts=@(
             @{ title="Start:"; value=$global:cleanupResults.StartTimeStr },
             @{ title="End:"; value=$global:cleanupResults.EndTimeStr },
@@ -248,6 +278,7 @@ if ($teamsWebhookUrl) {
         )}
     )
 
+    # Add collapsible sections per resource group
     foreach ($rg in $resourcesByRG.Keys | Sort-Object) {
         $rgData = $resourcesByRG[$rg]
 
@@ -260,7 +291,6 @@ if ($teamsWebhookUrl) {
         $rgTitle = "Resource Group: $rg (✅$removedCount | ⚠️$skippedCount | ❌$failedCount)"
 
         $rgItems = @()
-
         foreach ($vm in $rgData.Removed) { $rgItems += "✅ $vm" }
         foreach ($vm in $rgData.Skipped) { $rgItems += "⚠️ [WhatIf] $vm" }
         foreach ($vm in $rgData.Failed)  { $rgItems += "❌ $vm" }
@@ -269,6 +299,7 @@ if ($teamsWebhookUrl) {
         if ($section) { $cardBody += $section }
     }
 
+    # Send Adaptive Card
     $payload = @{
         type = "message"
         attachments = @(@{

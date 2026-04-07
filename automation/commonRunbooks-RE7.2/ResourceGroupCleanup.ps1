@@ -1,5 +1,5 @@
 <#
-.VERSION    5.1.0
+.VERSION    5.1.1
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -107,9 +107,33 @@ $global:cleanupResults = @{
 
 Write-Information "Cleanup run started at $($global:cleanupResults.StartTimeStr)" -Tags CleanupRun
 
-#–– Authenticate ––
-try { Connect-AzAccount -Identity; Write-Information "Azure authentication succeeded." -Tags Authentication }
-catch { Write-Error "Authentication failed: $_"; Stop-Transcript; throw }
+#–– Authenticate and select subscription ––
+try {
+    Connect-AzAccount -Identity
+
+    # Pick the subscription automatically
+    $context = Get-AzContext
+
+    if (-not $context.Subscription) {
+        $allSubs = Get-AzSubscription
+        if ($allSubs.Count -eq 1) {
+            Set-AzContext -SubscriptionId $allSubs[0].Id
+        } else {
+            # Pick first subscription in tenant
+            $sub = $allSubs | Where-Object { $_.TenantId -eq $context.Tenant.Id } | Select-Object -First 1
+            if ($sub) { Set-AzContext -SubscriptionId $sub.Id }
+            else { Set-AzContext -SubscriptionId $allSubs[0].Id }
+        }
+    }
+
+    # Assign once for use throughout runbook
+    $subscriptionName = (Get-AzContext).Subscription.Name
+    Write-Output "Runbook executing in subscription: $subscriptionName"
+
+} catch {
+    Write-Error "Authentication or subscription selection failed: $_"
+    throw
+}
 
 $subscriptionName = (Get-AzContext).Subscription.Name
 
@@ -252,7 +276,10 @@ if ($teamsWebhookUrl) {
         return $null
     }
 
-    $cardBody=@(@{ type="TextBlock"; text="**Azure VM Cleanup Report for subscription $subscriptionName**"; weight="Bolder"; size="Large" })
+    $cardBody=@(
+        @{ type="TextBlock"; text="Azure VM Cleanup Report for subscription $subscriptionName"; weight="Bolder"; size="Large" },
+        @{ type="TextBlock"; text="Runbook Mode: $(if ($WhatIf) { 'Safe Mode / WhatIf' } else { 'Actual Cleanup' })"; wrap=$true }
+    )
 
     foreach ($rg in $resourcesByRG.Keys | Sort-Object) {
         $rgData = $resourcesByRG[$rg]
