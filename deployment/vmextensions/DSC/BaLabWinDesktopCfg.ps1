@@ -1,7 +1,7 @@
 ################################################################
 # Script to configure Windows lab environment using DSC        #
 # Author: Chris Langford                                       #
-# Version: 7.0.1                                               #
+# Version: 7.0.2                                               #
 ################################################################
 
 Configuration BaWinDesktopLabCfg {
@@ -335,37 +335,59 @@ Configuration BaDataLevel4LabCfg {
             DependsOn = "[User]CreateUserAccount"
         }
 
-        # This resource block ensures that the file or command is executed        
-        Script "InstallPythonModules"
-        {
-            GetScript = {
-                @{ Result = "Check installed Python modules" } 
+        # This resource block ensures that the file or command is executed
+        Script "InstallPython" {
+            GetScript = { @{ Result = "Checking Python installation" } }
+
+            TestScript = {
+                $pythonPath = "C:\Program Files\Python39\python.exe"
+                Test-Path $pythonPath
             }
-            TestScript = { 
-                $pythonInstalled = Get-Command python -ErrorAction SilentlyContinue
-                if (-not $pythonInstalled) {
-                    return $false # Python is not installed, we consider the test as passed to trigger the SetScript to install Python first
+
+            SetScript = {
+                $pythonUrl = "https://www.python.org/ftp/python/3.9.18/python-3.9.18-amd64.exe"
+                $localPath = "C:\buildArtifacts\pythonInstaller.exe"
+
+                # Download MSI if it doesn't exist
+                if (-not (Test-Path $localPath)) {
+                    Invoke-WebRequest -Uri $pythonUrl -OutFile $localPath\pythonInstaller.exe
                 }
-                $requiredModules = @("numpy", "pandas", "scikit-learn", "statsmodels", "matplotlib", "seaborn", "scipy")
-                foreach ($module in $requiredModules) 
-                {
-                    $installed = python -m pip show $module 2>&1
-                    if (-not $installed) {
+
+                # Install Python system-wide
+                Start-Process -FilePath $localPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1" -Wait
+            }
+        }
+
+        # This resource block ensures that the file or command is executed        
+        Script "InstallPythonModules" {
+            DependsOn = "[Script]InstallPython"
+
+            GetScript = { @{ Result = "Checking Python modules" } }
+
+            TestScript = {
+                $pythonPath = "C:\Program Files\Python39\python.exe"
+                if (-not (Test-Path $pythonPath)) { return $false }
+
+                $modules = @("numpy","pandas","scikit-learn","statsmodels","matplotlib","seaborn","scipy")
+                foreach ($module in $modules) {
+                    if (-not (& $pythonPath -m pip show $module 2>$null)) {
                         return $false
                     }
                 }
                 return $true
             }
+
             SetScript = {
-                $pythonInstalled = Get-Command python -ErrorAction SilentlyContinue
-                if (-not $pythonInstalled) {
-                    Write-Error "Python is not installed. Please install Python and ensure it is added to the system PATH before running this configuration."
-                    return
-                }
-                $requiredModules = @("numpy", "pandas", "scikit-learn", "statsmodels", "matplotlib", "seaborn", "scipy")
-                foreach ($module in $requiredModules) {
+                $pythonPath = "C:\Program Files\Python39\python.exe"
+
+                # Ensure pip is up-to-date
+                & $pythonPath -m ensurepip --upgrade
+                & $pythonPath -m pip install --upgrade pip
+
+                $modules = @("numpy","pandas","scikit-learn","statsmodels","matplotlib","seaborn","scipy")
+                foreach ($module in $modules) {
                     Write-Verbose "Installing Python module: $module"
-                    python -m pip install $module
+                    & $pythonPath -m pip install $module --quiet --disable-pip-version-check
                 }
             }
         }
@@ -377,6 +399,8 @@ Configuration BaDataLevel4LabCfg {
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
                 Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
+                Remove-Item -Path "C:\buildArtifacts\" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction Silently
             }
             TestScript = { $false}
             GetScript = {
