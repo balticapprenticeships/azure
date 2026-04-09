@@ -12,7 +12,7 @@
 *.env
 [Dd]ev/
 [Aa]rchive/
-[Oo]perations/
+#[Oo]perations/
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
