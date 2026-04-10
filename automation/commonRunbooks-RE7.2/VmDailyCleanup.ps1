@@ -1,5 +1,5 @@
 <#
-.VERSION    1.5.1
+.VERSION    1.5.2
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -16,13 +16,17 @@
 .PARAMETER ThrottleLimit
     When ParallelMode is enabled, this parameter controls how many VM deletions run concurrently. Default is 5.
 .NOTES
-    LASTEDIT: 07.04.2026
+    LASTEDIT: 10.04.2026
 #>
 
 param(
     [Parameter(Mandatory=$true)]
     [ValidateNotNull()]
     [bool] $cleanupEnabled,
+
+    [Parameter(Mandatory=$false)]
+    [ValidatePattern('^[0-9a-fA-F-]{36}$')]
+    [string] $SubscriptionId,
 
     [Parameter(Mandatory=$false)]
     [ValidatePattern('^https://.*')]
@@ -88,26 +92,41 @@ $global:cleanupResults = @{
 try {
     Connect-AzAccount -Identity
 
-    # Pick the subscription automatically
-    $context = Get-AzContext
-
-    if (-not $context.Subscription) {
-        $allSubs = Get-AzSubscription
-        if ($allSubs.Count -eq 1) {
-            Set-AzContext -SubscriptionId $allSubs[0].Id
-        } else {
-            # Pick first subscription in tenant
-            $sub = $allSubs | Where-Object { $_.TenantId -eq $context.Tenant.Id } | Select-Object -First 1
-            if ($sub) { Set-AzContext -SubscriptionId $sub.Id }
-            else { Set-AzContext -SubscriptionId $allSubs[0].Id }
+    # Prefer parameter, fallback to Automation Variable
+    if (-not $subscriptionId) {
+        try {
+            $subscriptionId = Get-AutomationVariable -Name 'SubscriptionId'
+        }
+        catch {
+            Write-Error "Failed to retrieve SubscriptionId from Automation Variables: $_"
+            throw
         }
     }
 
-    # Assign once for use throughout runbook
-    $subscriptionName = (Get-AzContext).Subscription.Name
-    Write-Output "Runbook executing in subscription: $subscriptionName"
+    if (-not $subscriptionId) {
+        throw "SubscriptionId is not provided via parameter or Automation Variable."
+    }
 
-} catch {
+    # Normalize GUID formatting safety
+    $subscriptionId = $subscriptionId.Trim()
+
+    # Clear any existing context to avoid conflicts
+    Clear-AzContext -Force -ErrorAction SilentlyContinue
+
+    # Set context explicitly
+    Set-AzContext -SubscriptionId $subscriptionId -ErrorAction Stop
+
+    # Validate context
+    $context = Get-AzContext
+    if ($context.Subscription.Id -ne $subscriptionId) {
+        throw "Failed to set correct subscription context. Expected $subscriptionId but got $($context.Subscription.Id)"
+    }
+
+    $subscriptionName = $context.Subscription.Name
+    Write-Output "Runbook executing in subscription: $subscriptionName ($subscriptionId)"
+
+}
+catch {
     Write-Error "Authentication or subscription selection failed: $_"
     throw
 }
