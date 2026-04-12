@@ -1,5 +1,5 @@
 <#
-.VERSION    1.5.2
+.VERSION    1.5.3
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -16,7 +16,7 @@
 .PARAMETER ThrottleLimit
     When ParallelMode is enabled, this parameter controls how many VM deletions run concurrently. Default is 5.
 .NOTES
-    LASTEDIT: 10.04.2026
+    LASTEDIT: 12.04.2026
 #>
 
 param(
@@ -90,41 +90,29 @@ $global:cleanupResults = @{
 
 #–– Authenticate and select subscription ––
 try {
-    Connect-AzAccount -Identity
+    Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue
 
-    # Prefer parameter, fallback to Automation Variable
+    # Resolve subscription first
     if (-not $subscriptionId) {
-        try {
-            $subscriptionId = Get-AutomationVariable -Name 'SubscriptionId'
-        }
-        catch {
-            Write-Error "Failed to retrieve SubscriptionId from Automation Variables: $_"
-            throw
-        }
+        $subscriptionId = Get-AutomationVariable -Name 'SubscriptionId'
     }
 
     if (-not $subscriptionId) {
-        throw "SubscriptionId is not provided via parameter or Automation Variable."
+        throw "SubscriptionId is required."
     }
 
-    # Normalize GUID formatting safety
     $subscriptionId = $subscriptionId.Trim()
 
-    # Clear any existing context to avoid conflicts
-    Clear-AzContext -Force -ErrorAction SilentlyContinue
+    # 🔥 Bind subscription at login
+    Connect-AzAccount -Identity -Subscription $subscriptionId
 
-    # Set context explicitly
-    Set-AzContext -SubscriptionId $subscriptionId -ErrorAction Stop
-
-    # Validate context
     $context = Get-AzContext
+
     if ($context.Subscription.Id -ne $subscriptionId) {
-        throw "Failed to set correct subscription context. Expected $subscriptionId but got $($context.Subscription.Id)"
+        throw "Context mismatch after login."
     }
 
-    $subscriptionName = $context.Subscription.Name
-    Write-Output "Runbook executing in subscription: $subscriptionName ($subscriptionId)"
-
+    Write-Output "Runbook executing in subscription: $($context.Subscription.Name) ($subscriptionId)"
 }
 catch {
     Write-Error "Authentication or subscription selection failed: $_"
