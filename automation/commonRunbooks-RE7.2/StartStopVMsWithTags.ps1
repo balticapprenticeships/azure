@@ -1,5 +1,5 @@
 <#
-.VERSION    2.3.1
+.VERSION    2.4.0
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -16,7 +16,7 @@
 .Parameter   MaxRetries The maximum number of retries for transient errors (default: 3).
 .RuntimeEnvironment PowerShell-7.2
 .NOTES
-    LASTEDIT    26.03.2026
+    LASTEDIT    13.04.2026
 #>
 
 param (
@@ -41,6 +41,10 @@ param (
 
     [Parameter(Mandatory = $false)]
     [int]$MaxRetries = 3,
+
+    [Parameter(Mandatory=$false)]
+    [ValidatePattern('^[0-9a-fA-F-]{36}$')]
+    [string] $SubscriptionId,
 
     [Parameter(Mandatory=$false)]
     [ValidatePattern('^https://.*')]
@@ -79,12 +83,36 @@ if (-not $teamsWebhookUrl) {
     }
 }
 
-# Authenticate with Managed Identity
+#–– Authenticate and select subscription ––
 try {
-    Connect-AzAccount -Identity
-    Write-Information "Azure authentication succeeded." -Tags Authentication
+    Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue
+
+    # Resolve subscription first
+    if (-not $subscriptionId) {
+        $subscriptionId = Get-AutomationVariable -Name 'SubscriptionId'
+    }
+
+    if (-not $subscriptionId) {
+        throw "SubscriptionId is required."
+    }
+
+    $subscriptionId = $subscriptionId.Trim()
+
+    # 🔥 Bind subscription at login
+    Connect-AzAccount -Identity -Subscription $subscriptionId
+
+    $context = Get-AzContext
+
+    if ($context.Subscription.Id -ne $subscriptionId) {
+        throw "Context mismatch after login."
+    }
+
+    Write-Output "Runbook executing in subscription: $($context.Subscription.Name) ($subscriptionId)"
 }
-catch { Write-Error "Authentication failed: $_"; throw }
+catch {
+    Write-Error "Authentication or subscription selection failed: $_"
+    throw
+}
 
 $subscriptionName = (Get-AzContext).Subscription.Name
 
