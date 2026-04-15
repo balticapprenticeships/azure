@@ -1,5 +1,5 @@
 <#
-.VERSION    6.0.0
+.VERSION    6.0.1
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -21,7 +21,7 @@
     - Requires Azure PowerShell module (Az)
     - Run with appropriate permissions to delete VMs and manage resources
     - Edit parameters to configure execution mode and Teams integration
-    LASTEDIT: 12.04.2026
+    LASTEDIT: 15.04.2026
 #>
 
 param(
@@ -278,7 +278,7 @@ if ($teamsWebhookUrl) {
 
     # Card body
     $cardBody = @(
-        @{ type="TextBlock"; text="Azure VM Daily Cleanup Report for ($subscriptionName)"; weight="Bolder"; size="Large" },
+        @{ type="TextBlock"; text="Azure VM Cleanup Report for ($subscriptionName)"; weight="Bolder"; size="Large" },
         @{ type="TextBlock"; text="Runbook Mode: $(if ($WhatIf) { 'Safe Mode / WhatIf' } else { 'Actual Cleanup' })"; wrap=$true },
         @{ type="FactSet"; facts=@(
             @{ title="Start:"; value=$global:cleanupResults.StartTimeStr },
@@ -316,7 +316,7 @@ if ($teamsWebhookUrl) {
         type = "message"
         attachments = @(@{
             contentType = "application/vnd.microsoft.card.adaptive"
-            content = @{ type="AdaptiveCard"; version="1.5"; body=$cardBody }
+            content = @{ type="AdaptiveCard"; version="1.5"; body=$cardBody; msteams=@{ width="Full" } }
         })
     } | ConvertTo-Json -Depth 50
 

@@ -1,5 +1,5 @@
 <#
-.VERSION    1.5.3
+.VERSION    1.5.4
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -16,7 +16,7 @@
 .PARAMETER ThrottleLimit
     When ParallelMode is enabled, this parameter controls how many VM deletions run concurrently. Default is 5.
 .NOTES
-    LASTEDIT: 12.04.2026
+    LASTEDIT: 15.04.2026
 #>
 
 param(
@@ -311,7 +311,7 @@ if ($teamsWebhookUrl) {
         type = "message"
         attachments = @(@{
             contentType = "application/vnd.microsoft.card.adaptive"
-            content = @{ type="AdaptiveCard"; version="1.5"; body=$cardBody }
+            content = @{ type="AdaptiveCard"; version="1.5"; body=$cardBody; msteams=@{ width="Full" } }
         })
     } | ConvertTo-Json -Depth 50
 
