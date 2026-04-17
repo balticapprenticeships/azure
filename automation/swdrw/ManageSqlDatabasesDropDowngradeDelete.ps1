@@ -1,5 +1,5 @@
 <#
-.VERSION    2.0.0
+.VERSION    2.1.0
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -21,7 +21,7 @@
 .RuntimeEnvironment PowerShell-7.4
 
 .NOTES
-    LASTEDIT: 30-03-2026
+    LASTEDIT: 17.04.2026
     Custom runtime environment specified to ensure compatibility with latest Az modules and features.
 #>
 
@@ -29,6 +29,10 @@ param(
     [Parameter(Mandatory=$true)]
     [ValidateNotNull()]
     [bool] $cleanupEnabled,
+
+    [Parameter(Mandatory=$false)]
+    [ValidatePattern('^[0-9a-fA-F-]{36}$')]
+    [string] $SubscriptionId,
 
     [Parameter(Mandatory=$false)]
     [ValidateNotNullOrEmpty()]
@@ -95,10 +99,34 @@ Import-Module Az.ResourceGraph -Force
 Import-Module Az.Accounts -Force
 
 try {
-    Connect-AzAccount -Identity
-    Write-Information "Azure authentication succeeded." -Tags Authentication
+    Clear-AzContext -Scope Process -Force -ErrorAction SilentlyContinue
+
+    # Resolve subscription first
+    if (-not $subscriptionId) {
+        $subscriptionId = Get-AutomationVariable -Name 'SubscriptionId'
+    }
+
+    if (-not $subscriptionId) {
+        throw "SubscriptionId is required."
+    }
+
+    $subscriptionId = $subscriptionId.Trim()
+
+    # 🔥 Bind subscription at login
+    Connect-AzAccount -Identity -Subscription $subscriptionId
+
+    $context = Get-AzContext
+
+    if ($context.Subscription.Id -ne $subscriptionId) {
+        throw "Context mismatch after login."
+    }
+
+    Write-Output "Runbook executing in subscription: $($context.Subscription.Name) ($subscriptionId)"
 }
-catch { Write-Error "Authentication failed: $_"; Stop-Transcript; throw }
+catch {
+    Write-Error "Authentication or subscription selection failed: $_"
+    throw
+}
 
 # Get current Azure subscription name
 $subscriptionId = (Get-AzContext).Subscription.Id
