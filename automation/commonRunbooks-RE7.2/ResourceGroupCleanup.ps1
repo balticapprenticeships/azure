@@ -1,5 +1,5 @@
 <#
-.VERSION    6.0.1
+.VERSION    6.0.2
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
@@ -21,7 +21,7 @@
     - Requires Azure PowerShell module (Az)
     - Run with appropriate permissions to delete VMs and manage resources
     - Edit parameters to configure execution mode and Teams integration
-    LASTEDIT: 15.04.2026
+    LASTEDIT: 20.04.2026
 #>
 
 param(
@@ -69,7 +69,7 @@ function Get-LondonTime { param([datetime]$dt)
 }
 
 if (-not $teamsWebhookUrl) {
-    try { $teamsWebhookUrl = Get-AutomationVariable -Name 'TeamsWebhookUrlDailyCleanup' } catch {Write-Verbose "No Teams webhook URL provided or found."}
+    try { $teamsWebhookUrl = Get-AutomationVariable -Name 'TeamsWebhookUrlWeeklyCleanup' } catch {Write-Verbose "No Teams webhook URL provided or found."}
 }
 
 #–– Start Transcript ––
