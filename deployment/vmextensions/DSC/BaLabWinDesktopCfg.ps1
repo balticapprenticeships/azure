@@ -1,7 +1,7 @@
 ################################################################
 # Script to configure Windows lab environment using DSC        #
 # Author: Chris Langford                                       #
-# Version: 7.0.2                                               #
+# Version: 7.0.3                                               #
 ################################################################
 
 Configuration BaWinDesktopLabCfg {
@@ -335,32 +335,8 @@ Configuration BaDataLevel4LabCfg {
             DependsOn = "[User]CreateUserAccount"
         }
 
-        # This resource block ensures that the file or command is executed
-        Script "InstallPython" {
-            GetScript = { @{ Result = "Checking Python installation" } }
-
-            TestScript = {
-                $pythonPath = "C:\Program Files\Python39\python.exe"
-                Test-Path $pythonPath
-            }
-
-            SetScript = {
-                $pythonUrl = "https://www.python.org/ftp/python/3.14.4/python-3.14.4-amd64.exe"
-                $localPath = "C:\buildArtifacts\pythonInstaller.exe"
-
-                # Download MSI if it doesn't exist
-                if (-not (Test-Path $localPath)) {
-                    Invoke-WebRequest -Uri $pythonUrl -OutFile $localPath\pythonInstaller.exe
-                }
-
-                # Install Python system-wide
-                Start-Process -FilePath $localPath -ArgumentList "/quiet /norestart AssociateFiles=1 InstallAllUsers=1 PrependPath=1 Include_pip=1" -Wait
-            }
-        }
-
         # This resource block ensures that the file or command is executed        
         Script "InstallPythonModules" {
-            DependsOn = "[Script]InstallPython"
 
             GetScript = { @{ Result = "Checking Python modules" } }
 
