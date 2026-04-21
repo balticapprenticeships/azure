@@ -341,7 +341,7 @@ Configuration BaDataLevel4LabCfg {
             GetScript = { @{ Result = "Checking Python modules" } }
 
             TestScript = {
-                $pythonPath = "C:\Program Files\Python39\python.exe"
+                $pythonPath = "C:\Program Files\Python314\python.exe"
                 if (-not (Test-Path $pythonPath)) { return $false }
 
                 $modules = @("numpy","pandas","scikit-learn","statsmodels","matplotlib","seaborn","scipy")
@@ -354,7 +354,7 @@ Configuration BaDataLevel4LabCfg {
             }
 
             SetScript = {
-                $pythonPath = "C:\Program Files\Python39\python.exe"
+                $pythonPath = "C:\Program Files\Python314\python.exe"
 
                 # Ensure pip is up-to-date
                 & $pythonPath -m ensurepip --upgrade
