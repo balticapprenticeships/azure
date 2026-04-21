@@ -345,7 +345,7 @@ Configuration BaDataLevel4LabCfg {
             }
 
             SetScript = {
-                $pythonUrl = "https://www.python.org/ftp/python/3.9.18/python-3.9.18-amd64.exe"
+                $pythonUrl = "https://www.python.org/ftp/python/3.14.4/python-3.14.4-amd64.exe"
                 $localPath = "C:\buildArtifacts\pythonInstaller.exe"
 
                 # Download MSI if it doesn't exist
@@ -354,7 +354,7 @@ Configuration BaDataLevel4LabCfg {
                 }
 
                 # Install Python system-wide
-                Start-Process -FilePath $localPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1" -Wait
+                Start-Process -FilePath $localPath -ArgumentList "/quiet /norestart AssociateFiles=1 InstallAllUsers=1 PrependPath=1 Include_pip=1" -Wait
             }
         }
 
