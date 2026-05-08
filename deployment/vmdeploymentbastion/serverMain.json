@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.9.1",
+    "contentVersion": "4.0.9.2",
     "apiProfile": "2020-06-01-hybrid",
     "parameters": {
         "location": {
@@ -55,7 +55,7 @@
             "defaultValue": "Delete",
             "allowedValues": [
                 "Delete",
-                "detatch"
+                "Detach"
             ],
             "metadata": {
                 "description": ""
@@ -227,7 +227,7 @@
             "defaultValue": "Delete",
             "allowedValues": [
                 "Delete",
-                "detatch"
+                "Detach"
             ],
             "metadata": {
                 "description": ""
@@ -238,7 +238,7 @@
             "defaultValue": "Delete",
             "allowedValues": [
                 "Delete",
-                "detatch"
+                "Detach"
             ],
             "metadata": {
                 "description": ""
@@ -378,7 +378,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/networkInterface.json')]",
-                    "contentVersion": "4.1.0.1"
+                    "contentVersion": "4.1.0.2"
                 },
                 "parameters": {
                     "location": {
@@ -414,7 +414,7 @@
                     "createdBy": {
                         "value": "[parameters('createdBy')]"
                     },
-                    "deliveringCoachinitials": {
+                    "deliveringCoachInitials": {
                         "value": "[parameters('deliveringCoachInitials')]"
                     },
                     "courseStartDate": {
@@ -425,11 +425,7 @@
                     }
                 }
             },
-            "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'DeployNetworkSecurityGroup')]",
-                "[resourceId('Microsoft.Resources/deployments', 'DeployVirtualNetwork')]",
-                "[resourceId('Microsoft.Resources/deployments', 'DeployPublicIPAddress')]"
-            ]
+            "dependsOn": "[if(equals(parameters('vnetNewOrExisting'), 'new'), createArray(resourceId('Microsoft.Resources/deployments', 'DeployNetworkSecurityGroup'), resourceId('Microsoft.Resources/deployments', 'DeployVirtualNetwork'), resourceId('Microsoft.Resources/deployments', 'DeployPublicIPAddress')), createArray(resourceId('Microsoft.Resources/deployments', 'DeployNetworkSecurityGroup'), resourceId('Microsoft.Resources/deployments', 'DeployPublicIPAddress')))]"
         },
         {
             "name": "DeployNetworkSecurityGroup",
@@ -439,7 +435,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/networkSecurityGroup.json')]",
-                    "contentVersion": "4.1.0.1"
+                    "contentVersion": "4.1.0.2"
                 },
                 "parameters": {
                     "location": {
@@ -473,7 +469,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/virtualNetwork.json')]",
-                    "contentVersion": "4.1.0.1"
+                    "contentVersion": "4.1.0.2"
                 },
                 "parameters": {
                     "location": {
@@ -506,7 +502,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/publicIP.json')]",
-                    "contentVersion": "4.1.0.1"
+                    "contentVersion": "4.1.0.2"
                 },
                 "parameters": {
                     "location": {
@@ -521,7 +517,7 @@
                     "createdBy": {
                         "value": "[parameters('createdBy')]"
                     },
-                    "deliveringCoachinitials": {
+                    "deliveringCoachInitials": {
                         "value": "[parameters('deliveringCoachInitials')]"
                     },
                     "courseStartDate": {
@@ -542,7 +538,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/windowsServer.json')]",
-                    "contentVersion": "4.1.0.1"
+                    "contentVersion": "4.1.0.2"
                 },
                 "parameters": {
                     "location": {
@@ -731,7 +727,7 @@
         },
         "osDiskType": {
             "type": "string",
-            "value": "[parameters('osDisktype')]"
+            "value": "[parameters('osDiskType')]"
         },
         "vmSize": {
             "type": "string",
@@ -755,7 +751,7 @@
         },
         "virtualMachineFQDN": {
             "type": "array",
-            "value": "[reference('DeployPublicIPAddress').outputs.fqdn.value]"
+            "value": "[reference('DeployPublicIPAddress', '2025-04-01').outputs.FQDN.value]"
         }
     }
 }

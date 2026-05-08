@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.1.0.1",
+    "contentVersion": "4.1.0.2",
     "parameters": {
         "location": {
             "type": "string"
@@ -150,7 +150,7 @@
                 "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
                 "CourseEndDay": "[parameters('courseEndDay')]",
                 "Schedule": "[if(equals(parameters('startupSchedule'), 'Yes'), 'StartDaily', 'NoSchedule')]",
-                "IdleShutdown": "[parameters('idleVm')]",
+                "IdleShutdown": "[parameters('idleVM')]",
                 "Hiberbation": "False",
                 "Cleanup": "[parameters('resourceGroupCleanup')]"                
             },

@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.0.0.1",
+    "contentVersion": "1.0.0.2",
     "parameters": {
         "location": {
             "type": "string"
@@ -44,6 +44,12 @@
         "bastionPublicIpAddressName": {
             "type": "string"
         },
+        "vnetNewOrExisting": {
+            "type": "string"
+        },
+        "existingVnet": {
+            "type": "string"
+        },
         "createdBy": {
             "type": "string"
         },
@@ -56,6 +62,9 @@
         "resourceGroupCleanup": {
             "type": "string"
         }
+    },
+    "variables": {
+        "vnetName": "[if(equals(parameters('vnetNewOrExisting'), 'new'), concat(resourceGroup().name, '-vnet'), parameters('existingVnet'))]"
     },
     "resources": [
         {
@@ -93,7 +102,7 @@
                 "Cleanup": "[parameters('resourceGroupCleanup')]"
             },
             "dependsOn": [
-                "[resourceId(parameters('resourceGroup'), 'Microsoft.Network/publicIpAddresses', parameters('bastionPublicIpAddressName'))]"
+                "[resourceId('Microsoft.Network/publicIPAddresses', parameters('bastionPublicIpAddressName'))]"
             ],
             "sku": {
                 "name": "[parameters('bastionHostSku')]"
@@ -104,7 +113,7 @@
                         "name": "bastionHostIpConfig",
                         "properties": {
                             "subnet": {
-                                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(resourceGroup().name, '-vnet'), 'AzureBastionSubnet')]"
+                                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), 'AzureBastionSubnet')]"
                             },
                             "privateIPAllocationMethod": "Dynamic",
                             "publicIPAddress": {
@@ -118,12 +127,12 @@
                     }
                 ],
                 "scaleUnits": "[parameters('bastionHostScaleUnits')]",
-                "enableTunneling": "[parameters('enableTunneling')]",
-                "enableIpConnect": "[parameters('enableIpConnect')]",
-                "enableShareableLink": "[parameters('enableShareableLink')]",
-                "enableKerberos": "[parameters('enableKerberos')]",
-                "disableCopyPaste": "[parameters('disableCopyPaste')]",
-                "enableSessionRecording": "[parameters('enableSessionRecording')]",
+                "enableTunneling": "[parameters('bastionEnableTunneling')]",
+                "enableIpConnect": "[parameters('bastionEnableIpConnect')]",
+                "enableShareableLink": "[parameters('bastionEnableShareableLink')]",
+                "enableKerberos": "[parameters('bastionEnableKerberos')]",
+                "disableCopyPaste": "[parameters('bastionDisableCopyPaste')]",
+                "enableSessionRecording": "[parameters('bastionEnableSessionRecording')]",
                 "enablePrivateOnlyBastion": "[parameters('enablePrivateOnlyBastion')]"
             },
             "zones": "[parameters('bastionZones')]"
