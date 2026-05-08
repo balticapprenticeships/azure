@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.1.0.3",
+    "contentVersion": "4.1.0.4",
     "parameters": {
         "location": {
             "type": "string"
@@ -93,7 +93,7 @@
                 "Cleanup": "[parameters('resourceGroupCleanup')]"
             },
             "dependsOn": [
-                "[resourceId(parameters('resourceGroup'), 'Microsoft.Network/publicIpAddresses', parameters('bastionPublicIpAddressName'))]"
+                "[resourceId('Microsoft.Network/publicIpAddresses', parameters('bastionPublicIpAddressName'))]"
             ],
             "sku": {
                 "name": "[parameters('bastionHostSku')]"
@@ -118,12 +118,12 @@
                     }
                 ],
                 "scaleUnits": "[parameters('bastionHostScaleUnits')]",
-                "enableTunneling": "[parameters('enableTunneling')]",
-                "enableIpConnect": "[parameters('enableIpConnect')]",
-                "enableShareableLink": "[parameters('enableShareableLink')]",
-                "enableKerberos": "[parameters('enableKerberos')]",
-                "disableCopyPaste": "[parameters('disableCopyPaste')]",
-                "enableSessionRecording": "[parameters('enableSessionRecording')]",
+                "enableTunneling": "[parameters('bastionEnableTunneling')]",
+                "enableIpConnect": "[parameters('bastionEnableIpConnect')]",
+                "enableShareableLink": "[parameters('bastionEnableShareableLink')]",
+                "enableKerberos": "[parameters('bastionEnableKerberos')]",
+                "disableCopyPaste": "[parameters('bastionDisableCopyPaste')]",
+                "enableSessionRecording": "[parameters('bastionEnableSessionRecording')]",
                 "enablePrivateOnlyBastion": "[parameters('enablePrivateOnlyBastion')]"
             },
             "zones": "[parameters('bastionZones')]"
