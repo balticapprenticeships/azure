@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.9.2",
+    "contentVersion": "4.0.9.3",
     "apiProfile": "2020-06-01-hybrid",
     "parameters": {
         "location": {
@@ -630,7 +630,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/bastionHost.json')]",
-                    "contentVersion": "1.0.0.1"
+                    "contentVersion": "4.1.0.3"
                 },
                 "parameters": {
                     "location": {
