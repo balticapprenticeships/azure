@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.9.4",
+    "contentVersion": "4.0.9.5",
     "apiProfile": "2020-06-01-hybrid",
     "parameters": {
         "location": {
@@ -585,7 +585,9 @@
                     }
                 }
             },
-            "dependsOn": []
+            "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'DeployVirtualNetwork')]"
+            ]
         },
         {   
             "condition": "[equals(parameters('vnetNewOrExisting'), 'new')]",
