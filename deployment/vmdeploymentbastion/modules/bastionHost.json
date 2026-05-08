@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.1.0.4",
+    "contentVersion": "4.1.0.5",
     "parameters": {
         "location": {
             "type": "string"
@@ -72,10 +72,13 @@
                 "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
                 "Cleanup": "[parameters('resourceGroupCleanup')]"
             },
+            "sku": {
+                "name": "Standard"
+            },
             "properties": {
                 "publicIPAllocationMethod": "Static",
                 "publicIPAddressVersion": "IPv4"
-            },
+            },            
             "zones": "[parameters('bastionPublicIpZones')]"
         },
         {
