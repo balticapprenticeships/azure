@@ -61,7 +61,7 @@
             "defaultValue": "Delete",
             "allowedValues": [
                 "Delete",
-                "Detach"
+                "detatch"
             ],
             "metadata": {
                 "description": ""
@@ -255,7 +255,7 @@
             "defaultValue": "Delete",
             "allowedValues": [
                 "Delete",
-                "Detach"
+                "detatch"
             ],
             "metadata": {
                 "description": ""
@@ -266,7 +266,7 @@
             "defaultValue": "Delete",
             "allowedValues": [
                 "Delete",
-                "Detach"
+                "detatch"
             ],
             "metadata": {
                 "description": ""
@@ -501,7 +501,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/networkInterface.json')]",
-                    "contentVersion": "4.1.0.2"
+                    "contentVersion": "4.1.0.3"
                 },
                 "parameters": {
                     "location": {
@@ -537,7 +537,7 @@
                     "createdBy": {
                         "value": "[parameters('createdBy')]"
                     },
-                    "deliveringCoachInitials": {
+                    "deliveringCoachinitials": {
                         "value": "[parameters('deliveringCoachInitials')]"
                     },
                     "courseStartDate": {
@@ -548,7 +548,11 @@
                     }
                 }
             },
-            "dependsOn": "[if(equals(parameters('vnetNewOrExisting'), 'new'), if(equals(parameters('enableBastion'), 'no'), createArray(resourceId('Microsoft.Resources/deployments', 'DeployNetworkSecurityGroup'), resourceId('Microsoft.Resources/deployments', 'DeployVirtualNetwork'), resourceId('Microsoft.Resources/deployments', 'DeployPublicIPAddress')), createArray(resourceId('Microsoft.Resources/deployments', 'DeployNetworkSecurityGroup'), resourceId('Microsoft.Resources/deployments', 'DeployVirtualNetwork'))), if(equals(parameters('enableBastion'), 'no'), createArray(resourceId('Microsoft.Resources/deployments', 'DeployNetworkSecurityGroup'), resourceId('Microsoft.Resources/deployments', 'DeployPublicIPAddress')), createArray(resourceId('Microsoft.Resources/deployments', 'DeployNetworkSecurityGroup'))))]"
+            "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'DeployNetworkSecurityGroup')]",
+                "[resourceId('Microsoft.Resources/deployments', 'DeployVirtualNetwork')]",
+                "[resourceId('Microsoft.Resources/deployments', 'DeployPublicIPAddress')]"
+            ]
         },
         {
             "name": "DeployNetworkSecurityGroup",
@@ -558,7 +562,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/networkSecurityGroup.json')]",
-                    "contentVersion": "4.1.0.2"
+                    "contentVersion": "4.1.0.3"
                 },
                 "parameters": {
                     "location": {
@@ -592,7 +596,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/virtualNetwork.json')]",
-                    "contentVersion": "4.1.0.2"
+                    "contentVersion": "4.1.0.3"
                 },
                 "parameters": {
                     "location": {
@@ -626,7 +630,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/bastionHost.json')]",
-                    "contentVersion": "1.0.0.2"
+                    "contentVersion": "1.0.0.1"
                 },
                 "parameters": {
                     "location": {
@@ -643,12 +647,6 @@
                     },
                     "bastionPublicIpAddressName": {
                         "value": "[variables('bastionPublicIPAddressName')]"
-                    },
-                    "vnetNewOrExisting": {
-                        "value": "[parameters('vnetNewOrExisting')]"
-                    },
-                    "existingVnet": {
-                        "value": "[parameters('existingVnet')]"
                     },
                     "bastionEnableTunneling": {
                         "value": "[parameters('bastionEnableTunneling')]"
@@ -691,7 +689,9 @@
                     }
                 }
             },
-            "dependsOn": "[if(equals(parameters('vnetNewOrExisting'), 'new'), createArray(resourceId('Microsoft.Resources/deployments', 'DeployVirtualNetwork')), createArray())]"
+            "dependsOn": [
+                "[resourceId('Microsoft.Resources/deployments', 'DeployVirtualNetwork')]"
+            ]
         },
         {
             "condition": "[equals(parameters('enableBastion'), 'no')]",
@@ -702,7 +702,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/publicIP.json')]",
-                    "contentVersion": "4.1.0.2"
+                    "contentVersion": "4.1.0.3"
                 },
                 "parameters": {
                     "location": {
@@ -717,7 +717,7 @@
                     "createdBy": {
                         "value": "[parameters('createdBy')]"
                     },
-                    "deliveringCoachInitials": {
+                    "deliveringCoachinitials": {
                         "value": "[parameters('deliveringCoachInitials')]"
                     },
                     "courseStartDate": {
@@ -738,7 +738,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/windowsDesktop.json')]",
-                    "contentVersion": "4.1.0.2"
+                    "contentVersion": "4.1.0.3"
                 },
                 "parameters": {
                     "location": {
@@ -935,7 +935,7 @@
         },
         "osDiskType": {
             "type": "string",
-            "value": "[parameters('osDiskType')]"
+            "value": "[parameters('osDisktype')]"
         },
         "vmSize": {
             "type": "string",
@@ -957,9 +957,10 @@
             "type": "string",
             "value": "[parameters('imageVersion')]"
         },
-        "virtualMachineFQDN": {
+        "virtualMachineFqdn": {
             "type": "array",
-            "value": "[if(equals(parameters('enableBastion'), 'no'), reference('DeployPublicIPAddress', '2025-04-01').outputs.FQDN.value, createArray())]"
+            "value": "[if(equals(parameters('enableBastion'), 'no'), reference('DeployPublicIPAddress', '2025-04-01').outputs.fqdn.value, createArray())]"
+
         },
         "enableBastion": {
             "type": "string",
@@ -967,7 +968,7 @@
         },
         "bastionHostName": {
             "type": "string",
-            "value": "[variables('bastionHostName')]"
+            "value": "[parameters('bastionHostName')]"
         }
     }
 }
