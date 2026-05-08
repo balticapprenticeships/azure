@@ -598,7 +598,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/virtualNetwork.json')]",
-                    "contentVersion": "4.1.0.3"
+                    "contentVersion": "4.1.0.4"
                 },
                 "parameters": {
                     "location": {
