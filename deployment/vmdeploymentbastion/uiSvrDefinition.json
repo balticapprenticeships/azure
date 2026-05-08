@@ -2,7 +2,7 @@
     "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
     "handler": "Microsoft.Azure.CreateUIDef",
     "version": "0.1.2-preview",
-    "currentVersion": "4.0.0.2",
+    "currentVersion": "4.0.0.1",
     "parameters": {
         "config": {
             "isWizard": true
@@ -132,7 +132,7 @@
                         "name": "imageVersion",
                         "label": "OS Image Version",
                         "type": "Microsoft.Common.DropDown",
-                        "defaultValue": "latest",
+                        "defaultValue": "Latest",
                         "constraints": {
                             "allowedValues": [
                                 {
@@ -161,7 +161,7 @@
                         "name": "enableHotpatching",
                         "label": "Enable Hotpatching",
                         "type": "Microsoft.Common.OptionsGroup",
-                        "defaultValue": false,
+                        "defaultValue": "No",
                         "constraints": {
                             "allowedValues": [
                                 {
@@ -182,7 +182,7 @@
                         "name": "patchMode",
                         "label": "OS Patch Mode",
                         "type": "Microsoft.Common.DropDown",
-                        "defaultValue": "AutomaticByOS",
+                        "defaultValue": "Windows OS Automatic Updates",
                         "constraints": {
                             "allowedValues": [
                                 {
@@ -203,7 +203,7 @@
                         "name": "licenseType",
                         "label": "License Type",
                         "type": "Microsoft.Common.DropDown",
-                        "defaultValue": "AzureLicense",
+                        "defaultValue": "Azure OS License",
                         "constraints": {
                             "allowedValues": [
                                 {
@@ -382,7 +382,7 @@
                                 "name": "vnetNewOrExisting",
                                 "label": "New or Exisitng Virtual Network",
                                 "type": "Microsoft.Common.DropDown",
-                                "defaultValue": "new",
+                                "defaultValue": "New Virtual Network",
                                 "constraints": {
                                     "allowedValues": [
                                         {
@@ -582,7 +582,7 @@
                                 "name": "idleVm",
                                 "label": "Shutdown Idle Virtual Machines",
                                 "type": "Microsoft.Common.DropDown",                                
-                                "defaultValue": "No",
+                                "defaultValue": "Currently Not in Use",
                                 "multiLine": true,
                                 "constraints": {
                                     "allowedValues": [
@@ -606,7 +606,7 @@
                                 "name": "resourceGroupCleanup",
                                 "label": "Resource Group Cleanup",
                                 "type": "Microsoft.Common.DropDown",                                
-                                "defaultValue": "Enabled",
+                                "defaultValue": "Yes",
                                 "multiLine": true,
                                 "constraints": {
                                     "allowedValues": [
@@ -642,6 +642,8 @@
 			"bootcampCourse": "[steps('osConfig').courseImageBootcamp]",            
             "imageVersion": "[steps('osConfig').imageVersion]",
             "enableHotpatching": "[steps('osConfig').enableHotpatching]",
+            "patchMode": "[steps('osConfig').patchMode]",
+            "licenseType": "[steps('osConfig').licenseType]",
             "securityType": "[steps('vmConfig').vmSecurity.securityType]",
             "secureBoot": "[steps('vmConfig').vmSecurity.secureBoot]",
             "vTPM": "[steps('vmConfig').vmSecurity.vTPM]",
@@ -655,7 +657,7 @@
             "courseStartDate": "[steps('tags').mngTagsConfig.courseDate]",
             "courseEndDay": "[steps('tags').mngTagsConfig.courseEndDay]",
             "startupSchedule": "[steps('tags').mngTagsConfig.schedule]",
-            "idleVM": "[steps('tags').mngTagsConfig.idleVm]",
+            "idleVm": "[steps('tags').mngTagsConfig.idleVm]",
             "resourceGroupCleanup": "[steps('tags').mngTagsConfig.resourceGroupCleanup]"
         }
     }

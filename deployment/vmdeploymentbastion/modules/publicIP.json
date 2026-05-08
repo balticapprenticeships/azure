@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.1.0.2",
+    "contentVersion": "4.1.0.3",
     "parameters": {
         "location": {
             "type": "string"
@@ -26,7 +26,7 @@
     },
     "functions": [],
     "variables": {
-        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachInitials')))]"
+        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachinitials')))]"
     },
     "resources": [
         {
@@ -59,7 +59,7 @@
         }
     ],
     "outputs": {
-        "FQDN": {
+        "fqdn": {
             "type": "array",
             "copy": {
                 "count": "[parameters('vmCount')]",
