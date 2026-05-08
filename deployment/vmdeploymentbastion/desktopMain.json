@@ -630,7 +630,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/bastionHost.json')]",
-                    "contentVersion": "4.1.0.4"
+                    "contentVersion": "4.1.0.5"
                 },
                 "parameters": {
                     "location": {
