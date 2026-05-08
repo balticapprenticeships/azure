@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.1.0.0",
+    "contentVersion": "4.1.0.1",
     "parameters": {
         "location": {
             "type": "string"
@@ -59,7 +59,7 @@
         {
             "name": "[concat(variables('vmNamePrefix'), copyIndex('nicloop', 1), '-nic')]",
             "type": "Microsoft.Network/networkInterfaces",
-            "apiVersion": "2021-03-01",
+            "apiVersion": "2025-05-01",
             "location": "[parameters('location')]",
             "tags": {
                 "DisplayName": "[concat(variables('vmNamePrefix'), copyIndex('nicloop', 1), '-nic')]",

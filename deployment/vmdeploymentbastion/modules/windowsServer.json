@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.1.0",
+    "contentVersion": "4.1.0.1",
     "parameters": {
         "location": {
             "type": "string"
@@ -138,7 +138,7 @@
     "resources": [
         {
             "type": "Microsoft.Compute/virtualMachines",
-            "apiVersion": "2021-11-01",
+            "apiVersion": "2025-04-01",
             "name": "[concat(variables('vmNamePrefix'), copyIndex('virtualMachineLoop', 1))]",
             "location": "[parameters('location')]",
             "tags": {

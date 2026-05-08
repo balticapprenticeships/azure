@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.0.0",
+    "contentVersion": "4.1.0.1",
     "parameters": {
         "location": {
             "type": "string"
@@ -32,7 +32,7 @@
         {
             "name": "[concat(variables('vmNamePrefix'), copyIndex('publicIpNameLoop', 1), '-ip')]",
             "type": "Microsoft.Network/publicIPAddresses",
-            "apiVersion": "2020-11-01",
+            "apiVersion": "2025-05-01",
             "location": "[parameters('location')]",
             "tags": {
                 "DisplayName": "Public IP Address",

@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.0.0.0",
+    "contentVersion": "1.0.0.1",
     "parameters": {
         "location": {
             "type": "string"
@@ -60,7 +60,7 @@
     "resources": [
         {
             "type": "Microsoft.Network/publicIPAddresses",
-            "apiVersion": "2020-11-01",
+            "apiVersion": "2025-05-01",
             "name": "[parameters('bastionPublicIpAddressName')]",
             "location": "[parameters('location')]",
             "tags": {
@@ -80,7 +80,7 @@
         },
         {
             "type": "Microsoft.Network/bastionHosts",
-            "apiVersion": "2023-09-01",
+            "apiVersion": "2025-05-01",
             "name": "[parameters('bastionHostName')]",
             "location": "[parameters('location')]",
             "tags": {
