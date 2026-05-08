@@ -1,0 +1,97 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "4.1.0.0",
+    "parameters": {
+        "location": {
+            "type": "string"
+        },
+        "createdBy": {
+            "type": "string"
+        },
+        "osPlatform": {
+            "type": "string"
+        },
+        "enableBastion": {
+            "type": "string"
+        },
+        "courseStartDate": {
+            "type": "string"
+        },
+        "resourceGroupCleanup": {
+            "type": "string"
+        }
+    },
+    "functions": [],
+    "variables": {
+        "nsgName": "[concat(resourceGroup().name, '-nsg')]",
+        "allowRdp": {
+            "name": "Allow-RDP",
+            "properties": {
+                "priority": 300,
+                "protocol": "Tcp",
+                "access": "Allow",
+                "direction": "Inbound",
+                "sourceAddressPrefix": "*",
+                "sourcePortRange": "*",
+                "destinationAddressPrefix": "*",
+                "destinationPortRange": "3389"
+            }
+        },
+        "allowRdpBastion": {
+            "name": "Allow-RDP-Bastion",
+            "properties": {
+                "priority": 300,
+                "protocol": "Tcp",
+                "access": "Allow",
+                "direction": "Inbound",
+                "sourceAddressPrefix": "10.30.1.0/26",
+                "sourcePortRange": "*",
+                "destinationAddressPrefix": "*",
+                "destinationPortRange": "3389"
+            }
+        },
+        "allowSsh": {
+            "name": "Allow-SSH",
+            "properties": {
+                "priority": 310,
+                "protocol": "Tcp",
+                "access": "Allow",
+                "direction": "Inbound",
+                "sourceAddressPrefix": "*",
+                "sourcePortRange": "*",
+                "destinationAddressPrefix": "*",
+                "destinationPortRange": "22"
+            }
+        },
+        "securityRules": "[if(equals(parameters('osPlatform'), 'Windows'), if(equals(parameters('enableBastion'), 'yes'), createArray(variables('allowRdpBastion')), createArray(variables('allowRdp'))), createArray(variables('allowSsh')))]"
+    },
+    "resources": [
+        {
+            "name": "[variables('nsgName')]",
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "apiVersion": "2020-11-01",
+            "location": "[parameters('location')]",
+            "tags": {
+                "DisplayName": "Network Security Group",
+                "ResourceType": "NetworkSecurityGroup",
+                "Dept": "[resourceGroup().tags['Dept']]",
+                "CreatedBy": "[parameters('createdBy')]",
+                "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
+                "Cleanup": "[parameters('resourceGroupCleanup')]"
+            },
+            "properties": {
+                "securityRules": "[variables('securityRules')]"
+            }
+        }
+    ],
+    "outputs": {
+        "nsgId": {
+            "type": "object",
+            "value": "[reference(resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName')))]"
+        },
+        "nsgRules": {
+            "type": "array",
+            "value": "[reference(resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))).securityRules]"
+        }
+    }
+}

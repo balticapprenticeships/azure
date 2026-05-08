@@ -1,0 +1,132 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "type": "string"
+        },
+        "bastionHostName": {
+            "type": "string"
+        },
+        "bastionHostSku": {
+            "type": "string"
+        },
+        "bastionHostScaleUnits": {
+            "type": "int"
+        },
+        "bastionEnableTunneling": {
+            "type": "bool"
+        },
+        "bastionEnableIpConnect": {
+            "type": "bool"
+        },
+        "bastionEnableShareableLink": {
+            "type": "bool"
+        },
+        "bastionEnableKerberos": {
+            "type": "bool"
+        },
+        "bastionDisableCopyPaste": {
+            "type": "bool"
+        },
+        "bastionEnableSessionRecording": {
+            "type": "bool"
+        },
+        "enablePrivateOnlyBastion": {
+            "type": "bool"
+        },
+        "bastionZones": {
+            "type": "array"
+        },
+        "bastionPublicIpZones": {
+            "type": "array"
+        },
+        "bastionPublicIpAddressName": {
+            "type": "string"
+        },
+        "createdBy": {
+            "type": "string"
+        },
+        "courseStartDate": {
+            "type": "string"
+        },
+        "courseEndDay": {
+            "type": "string"
+        },
+        "resourceGroupCleanup": {
+            "type": "string"
+        }
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Network/publicIPAddresses",
+            "apiVersion": "2020-11-01",
+            "name": "[parameters('bastionPublicIpAddressName')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "DisplayName": "Public IP Address",
+                "ResourceType": "PublicIPAddress",
+                "ResourceUsage": "Bastion Host",
+                "Dept": "[resourceGroup().tags['Dept']]",
+                "CreatedBy": "[parameters('createdBy')]",
+                "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
+                "Cleanup": "[parameters('resourceGroupCleanup')]"
+            },
+            "properties": {
+                "publicIPAllocationMethod": "Static",
+                "publicIPAddressVersion": "IPv4"
+            },
+            "zones": "[parameters('bastionPublicIpZones')]"
+        },
+        {
+            "type": "Microsoft.Network/bastionHosts",
+            "apiVersion": "2023-09-01",
+            "name": "[parameters('bastionHostName')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "DisplayName": "Bastion Host",
+                "ResourceType": "Bastion",
+                "Dept": "[resourceGroup().tags['Dept']]",
+                "CreatedBy": "[parameters('createdBy')]",
+                "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
+                "CourseEndDay": "[parameters('courseEndDay')]",
+                "Cleanup": "[parameters('resourceGroupCleanup')]"
+            },
+            "dependsOn": [
+                "[resourceId(parameters('resourceGroup'), 'Microsoft.Network/publicIpAddresses', parameters('bastionPublicIpAddressName'))]"
+            ],
+            "sku": {
+                "name": "[parameters('bastionHostSku')]"
+            },
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "bastionHostIpConfig",
+                        "properties": {
+                            "subnet": {
+                                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(resourceGroup().name, '-vnet'), 'AzureBastionSubnet')]"
+                            },
+                            "privateIPAllocationMethod": "Dynamic",
+                            "publicIPAddress": {
+                                "id": "[resourceId('Microsoft.Network/publicIPAddresses', parameters('bastionPublicIpAddressName'))]",
+                                "properties": {
+                                    "publicIPAllocationMethod": "Static",
+                                    "publicIPAddressVersion": "IPv4"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "scaleUnits": "[parameters('bastionHostScaleUnits')]",
+                "enableTunneling": "[parameters('enableTunneling')]",
+                "enableIpConnect": "[parameters('enableIpConnect')]",
+                "enableShareableLink": "[parameters('enableShareableLink')]",
+                "enableKerberos": "[parameters('enableKerberos')]",
+                "disableCopyPaste": "[parameters('disableCopyPaste')]",
+                "enableSessionRecording": "[parameters('enableSessionRecording')]",
+                "enablePrivateOnlyBastion": "[parameters('enablePrivateOnlyBastion')]"
+            },
+            "zones": "[parameters('bastionZones')]"
+        }
+    ]
+}
