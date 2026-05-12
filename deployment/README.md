@@ -17,6 +17,11 @@ This modular template allow you to deploy multiple Windows or Linux server based
 
 This modular template allow you to deploy multiple Windows or Linux serverdesktops based VMs behind a Bastion Host.
 
+#### Desktop - Bicep
+[![Deploy Windows Desktop VM to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fbalticapprenticeships%2Fazure%2Fmain%2Fdeployment%2Fvmdeploymentbicep%2FdesktopMain.bicep/createUIDefinitionUri/https%3A%2F%2Fraw.githubusercontent.com%2Fbalticapprenticeships%2Fazure%2Fmain%2Fdeployment%2Fvmdeploymentbicep%2FuiWcDefinition.json)
+
+This modular template allow you to deploy multiple Windows or Linux serverdesktops based VMs behind a Bastion Host.
+
 <!--## DevOps Testing Only
 ### Modular Windows Based Virtual Machine Deployment
 
