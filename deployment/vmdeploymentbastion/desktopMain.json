@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.9.5",
+    "contentVersion": "4.0.9.6",
     "apiProfile": "2020-06-01-hybrid",
     "parameters": {
         "location": {
@@ -585,9 +585,7 @@
                     }
                 }
             },
-            "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'DeployVirtualNetwork')]"
-            ]
+            "dependsOn": []            ]
         },
         {   
             "condition": "[equals(parameters('vnetNewOrExisting'), 'new')]",
@@ -598,7 +596,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/virtualNetwork.json')]",
-                    "contentVersion": "4.1.0.4"
+                    "contentVersion": "4.1.0.5"
                 },
                 "parameters": {
                     "location": {
@@ -613,6 +611,9 @@
                     "createdBy": {
                         "value": "[parameters('createdBy')]"
                     },
+                    "routeway": {
+                        "value": "[parameters('routeway')]"
+                    },
                     "courseStartDate": {
                         "value": "[parameters('courseStartDate')]"
                     },
@@ -621,7 +622,7 @@
                     }
                 }
             },
-            "dependsOn": []
+            "dependsOn": ["[resourceId('Microsoft.Resources/deployments', 'DeployNetworkSecurityGroup')]"]
         },
         {
             "condition": "[equals(parameters('enableBastion'), 'yes')]",
