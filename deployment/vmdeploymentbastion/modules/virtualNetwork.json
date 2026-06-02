@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.1.0.4",
+    "contentVersion": "4.1.0.5",
     "parameters": {
         "location": {
             "type": "string"
@@ -12,6 +12,9 @@
             "type": "string"
         },
         "createdBy": {
+            "type": "string"
+        },
+        "routeway": {
             "type": "string"
         },
         "courseStartDate": {
@@ -26,7 +29,8 @@
         "vnetName": "[concat(resourceGroup().name, '-vnet')]",
         "addressPrefixes": "10.255.0.0/16",
         "subnetsAddressPrefix": "10.255.0.0/24",
-        "bastionSubnetPrefix": "10.255.1.0/26"
+        "bastionSubnetPrefix": "10.255.1.0/26",
+        "routeTableName": "[concat(parameters('routeway'), 'rwroutetable')]"
     },
     "resources": [
         {
@@ -48,7 +52,7 @@
                         "[variables('addressPrefixes')]"
                     ]
                 },
-                "subnets": "[if(equals(toLower(parameters('enableBastion')), 'yes'), createArray(createObject('name', 'AzureBastionSubnet', 'properties', createObject('addressPrefix', variables('bastionSubnetPrefix'))), createObject('name', parameters('subnetName'), 'properties', createObject('addressPrefix', variables('subnetsAddressPrefix'), 'networkSecurityGroup', createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', concat(resourceGroup().name, '-nsg')))))), createArray(createObject('name', parameters('subnetName'), 'properties', createObject('addressPrefix', variables('subnetsAddressPrefix'), 'networkSecurityGroup', createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', concat(resourceGroup().name, '-nsg'))))))) ]"
+                "subnets": "[if(equals(toLower(parameters('enableBastion')), 'yes'), createArray(createObject('name', 'AzureBastionSubnet', 'properties', createObject('addressPrefix', variables('bastionSubnetPrefix'))), createObject('name', parameters('subnetName'), 'properties', createObject('addressPrefix', variables('subnetsAddressPrefix'), 'networkSecurityGroup', createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', concat(resourceGroup().name, '-nsg')))))), createArray(createObject('name', parameters('subnetName'), 'properties', createObject('addressPrefix', variables('subnetsAddressPrefix'), 'networkSecurityGroup', createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', concat(resourceGroup().name, '-nsg'))), 'routeTable', createObject('id', resourceId('Microsoft.Network/routeTables', variables('routeTableName'))))))) ]"
             }
         }
     ],
