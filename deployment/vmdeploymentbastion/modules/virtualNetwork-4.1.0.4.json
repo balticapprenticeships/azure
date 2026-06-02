@@ -1,0 +1,69 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "4.1.0.4",
+    "parameters": {
+        "location": {
+            "type": "string"
+        },
+        "subnetName": {
+            "type": "string"
+        },
+        "enableBastion": {
+            "type": "string"
+        },
+        "createdBy": {
+            "type": "string"
+        },
+        "courseStartDate": {
+            "type": "string"
+        },
+        "resourceGroupCleanup": {
+            "type": "string"
+        }
+    },
+    "functions": [],
+    "variables": {
+        "vnetName": "[concat(resourceGroup().name, '-vnet')]",
+        "addressPrefixes": "10.255.0.0/16",
+        "subnetsAddressPrefix": "10.255.0.0/24",
+        "bastionSubnetPrefix": "10.255.1.0/26"
+    },
+    "resources": [
+        {
+            "name": "[variables('vnetName')]",
+            "type": "Microsoft.Network/virtualNetworks",
+            "apiVersion": "2025-05-01",
+            "location": "[parameters('location')]",
+            "tags": {
+                "DisplayName": "Virtual Network",
+                "ResourceType": "VirtualNetwork",
+                "Dept": "[resourceGroup().tags['Dept']]",
+                "CreatedBy": "[parameters('createdBy')]",
+                "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
+                "Cleanup": "[parameters('resourceGroupCleanup')]"
+            },
+            "properties": {
+                "addressSpace": {
+                    "addressPrefixes": [
+                        "[variables('addressPrefixes')]"
+                    ]
+                },
+                "subnets": "[if(equals(toLower(parameters('enableBastion')), 'yes'), createArray(createObject('name', 'AzureBastionSubnet', 'properties', createObject('addressPrefix', variables('bastionSubnetPrefix'))), createObject('name', parameters('subnetName'), 'properties', createObject('addressPrefix', variables('subnetsAddressPrefix'), 'networkSecurityGroup', createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', concat(resourceGroup().name, '-nsg')))))), createArray(createObject('name', parameters('subnetName'), 'properties', createObject('addressPrefix', variables('subnetsAddressPrefix'), 'networkSecurityGroup', createObject('id', resourceId('Microsoft.Network/networkSecurityGroups', concat(resourceGroup().name, '-nsg'))))))) ]"
+            }
+        }
+    ],
+    "outputs": {
+        "vnetName": {
+            "type": "object",
+            "value": "[reference(resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')))]"
+        },
+        "subnetName": {
+            "type": "array",
+            "value": "[reference(resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))).subnets]"
+        },
+        "vnetId": {
+            "type": "object",
+            "value": "[reference(resourceId('Microsoft.Network/virtualNetworks', variables('vnetName')))]"
+        }
+    }
+}
