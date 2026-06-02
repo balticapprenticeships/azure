@@ -1,5 +1,5 @@
 <#
-.version 0.6.0
+.version 0.7.0
 .AUTHOR Chris Langford
 .SYNOPSIS
     This script automates the creation of spoke virtual networks in each resource group of a subscription, assigns them CIDR blocks from a defined range, and peers them with a central firewall VNet. It also tags the VNets and applies a resource lock to prevent accidental deletion.
@@ -91,7 +91,7 @@ try {
     $subscriptionId = $subscriptionId.Trim()
 
     # 🔥 Bind subscription at login
-    Connect-AzAccount -Identity -Subscription $subscriptionId
+    Connect-AzAccount -Identity -Subscription $subscriptionId | Out-Null
 
     $context = Get-AzContext
 
@@ -230,7 +230,7 @@ function Get-BaseCidrForSubscription {
         $nextCidr = Get-NextFreeBaseCidr -ExistingCidrs $assignedCidrs
         if (-not $DryRun) {
             Invoke-InCidrStoreSubscription {
-                Add-AzTableRow -Table $cidrTable -PartitionKey "CIDR" -RowKey $SubscriptionId -Properties @{BaseCidr=$nextCidr;NextIndex=0} | Out-Null
+                Add-AzTableRow -Table $cidrTable -PartitionKey "CIDR" -RowKey $SubscriptionId -Property @{BaseCidr=$nextCidr;NextIndex=0} -ErrorAction Stop | Out-Null
             }
         }
         return $nextCidr
@@ -247,13 +247,21 @@ function Get-NextSubnetCidr {
         $entry = Invoke-InCidrStoreSubscription {
             Get-AzTableRow -Table $cidrTable -PartitionKey "CIDR" -RowKey $SubscriptionId
         }
+        if (-not $entry) {
+            throw "CIDR table row for subscription '$SubscriptionId' was not found after base CIDR allocation."
+        }
+
         $index = $entry.NextIndex
+        if ($null -eq $index) {
+            throw "CIDR table row for subscription '$SubscriptionId' does not contain a NextIndex value."
+        }
+
         $subnets = Get-Subnets -BaseCidr $baseCidr -NewPrefix $PrefixLength
         if ($index -ge $subnets.Count) { throw "CIDR exhausted in base $baseCidr" }
         $nextSubnet = $subnets[$index]
         $entry.NextIndex = $index + 1
         Invoke-InCidrStoreSubscription {
-            Update-AzTableRow -Table $cidrTable -Row $entry | Out-Null
+            $entry | Update-AzTableRow -Table $cidrTable -ErrorAction Stop | Out-Null
         }
         return $nextSubnet
     } else {
