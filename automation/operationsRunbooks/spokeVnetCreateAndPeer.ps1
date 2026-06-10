@@ -1,5 +1,5 @@
 <#
-.version 1.0.0
+.version 3.0.0
 .AUTHOR Chris Langford
 .SYNOPSIS
     This script automates the creation of spoke virtual networks in each resource group of a subscription, assigns them CIDR blocks from a defined range, and peers them with a central firewall VNet. It also tags the VNets and applies a resource lock to prevent accidental deletion.
@@ -44,13 +44,9 @@ param(
     [ValidatePattern('^[0-9a-fA-F-]{36}$')]
     [string] $SubscriptionId,
 
-    [Parameter(Mandatory=$false)]
+
     [string]$FirewallSubscriptionId = "c4790cb5-6d79-4f3b-914e-3307eb65c9d3",
-
-    [Parameter(Mandatory=$false)]
     [string]$FirewallVnetName = "FirewallRg-vnet",
-
-    [Parameter(Mandatory=$false)]
     [string]$FirewallVnetResourceGroup = "FirewallRg",
 
     [hashtable]$Tags = @{Cleanup="Disabled"},
@@ -60,12 +56,10 @@ param(
     [int]$SubnetPrefixLength = 26,
 
     [string]$StorageAccountResourceGroup = "NetworkAutomationRg",
-    [Parameter(Mandatory=$false)]
     [string]$CidrStoreAccountName = "cidrstoresa",
     [Parameter(Mandatory=$false)]
     [ValidatePattern('^[0-9a-fA-F-]{36}$')]
     [string]$CidrStoreSubscriptionId,
-    [Parameter(Mandatory=$false)]
     [string]$CidrStoreTableName = "CidrAllocation",
 
     [string[]]$ExcludeRgPattern = @("OMSrg$", "NetworkWatcherRG", "DefaultResourceGroup-"),
@@ -93,7 +87,7 @@ try {
 
     $subscriptionId = $subscriptionId.Trim()
 
-    # 🔥 Bind subscription at login
+    # Bind subscription at login
     Connect-AzAccount -Identity -Subscription $subscriptionId
 
     $context = Get-AzContext
@@ -157,120 +151,103 @@ function Invoke-InFirewallSubscription {
 }
 
 # ----------------------------
-# Cidr Helpers
+# Table concurrency helpers
 # ----------------------------
-function Get-CidrLockBlob {
+function Test-CidrConcurrencyConflict {
     param(
-        [string]$StorageAccountName,
-        [string]$ContainerName = "cidr-locks",
-        [string]$BlobName = "cidr-allocation.lock"
+        [Parameter(Mandatory=$true)]
+        [System.Management.Automation.ErrorRecord]$ErrorRecord
     )
 
-    Invoke-InCidrStoreSubscription {
-
-        $ctx = New-AzStorageContext `
-            -StorageAccountName $StorageAccountName `
-            -UseConnectedAccount
-
-        $container = Get-AzStorageContainer `
-            -Name $ContainerName `
-            -Context $ctx `
-            -ErrorAction SilentlyContinue
-
-        if (-not $container) {
-            $container = New-AzStorageContainer `
-                -Name $ContainerName `
-                -Context $ctx
+    $exception = $ErrorRecord.Exception
+    while ($exception) {
+        $statusCode = $exception.RequestInformation.HttpStatusCode
+        if ($statusCode -in 409, 412) {
+            return $true
         }
-
-        $blob = Get-AzStorageBlob `
-            -Container $ContainerName `
-            -Blob $BlobName `
-            -Context $ctx `
-            -ErrorAction SilentlyContinue
-
-        if (-not $blob) {
-
-            $tmp = Join-Path $env:TEMP "cidr-lock.txt"
-            "lock" | Out-File $tmp
-
-            Set-AzStorageBlobContent `
-                -Container $ContainerName `
-                -File $tmp `
-                -Blob $BlobName `
-                -Context $ctx `
-                -Force | Out-Null
-        }
-
-        return @{
-            Context = $ctx
-            Container = $ContainerName
-            Blob = $BlobName
-        }
+        $exception = $exception.InnerException
     }
+
+    if ($ErrorRecord.Exception.Message -match '\b(409|412)\b|conflict|precondition') {
+        return $true
+    }
+
+    return $false
 }
 
-function Request-CidrLease {
-
+function Invoke-CidrConcurrencyRetry {
     param(
-        [string]$StorageAccountName,
+        [Parameter(Mandatory=$true)]
+        [scriptblock]$ScriptBlock,
         [int]$RetrySeconds = 5,
         [int]$MaxRetries = 24
     )
 
-    $lockBlob = Get-CidrLockBlob `
-        -StorageAccountName $StorageAccountName
-
     for ($i = 0; $i -lt $MaxRetries; $i++) {
-
         try {
-
-            $lease = New-AzStorageBlobLease `
-                -Container $lockBlob.Container `
-                -Blob $lockBlob.Blob `
-                -Context $lockBlob.Context `
-                -LeaseAction Acquire `
-                -LeaseDuration 60 `
-                -ErrorAction Stop
-
-            return @{
-                LeaseId = $lease.LeaseId
-                Context = $lockBlob.Context
-                Container = $lockBlob.Container
-                Blob = $lockBlob.Blob
-            }
+            return & $ScriptBlock
         }
         catch {
+            if (-not (Test-CidrConcurrencyConflict -ErrorRecord $_)) {
+                throw
+            }
 
-            Write-Output "CIDR lease busy. Waiting..."
-
+            Write-Output "CIDR allocation changed concurrently. Retrying..."
             Start-Sleep -Seconds $RetrySeconds
         }
     }
 
-    throw "Unable to acquire CIDR allocation lease."
+    throw "Unable to update CIDR allocation after $MaxRetries optimistic concurrency retries."
 }
 
-function Unlock-CidrLease {
+function Get-CidrAllocationRows {
+    Invoke-InCidrStoreSubscription {
+        Get-AzTableRow -Table $cidrTable -PartitionKey "CIDR"
+    }
+}
 
+function Get-CidrAllocatorState {
+    Invoke-InCidrStoreSubscription {
+        Get-AzTableRow `
+            -Table $cidrTable `
+            -PartitionKey "CIDR_STATE" `
+            -RowKey "GLOBAL"
+    }
+}
+
+function Get-CidrSubscriptionAllocation {
+    param([string]$SubscriptionId)
+
+    Invoke-InCidrStoreSubscription {
+        Get-AzTableRow `
+            -Table $cidrTable `
+            -PartitionKey "CIDR" `
+            -RowKey $SubscriptionId
+    }
+}
+
+function Update-CidrTableRowWithEtag {
     param(
-        [Parameter(Mandatory)]
-        $Lease
+        [Parameter(Mandatory=$true)]
+        $Table,
+        [Parameter(Mandatory=$true)]
+        $Row
     )
 
-    try {
+    $updatedEntity = New-Object `
+        -TypeName "Microsoft.Azure.Cosmos.Table.DynamicTableEntity" `
+        -ArgumentList $Row.PartitionKey, $Row.RowKey
 
-        Remove-AzStorageBlobLease `
-            -Container $Lease.Container `
-            -Blob $Lease.Blob `
-            -Context $Lease.Context `
-            -LeaseId $Lease.LeaseId `
-            -ErrorAction Stop | Out-Null
+    foreach ($prop in $Row.psobject.Properties) {
+        if ($prop.Name -notin @("PartitionKey", "RowKey", "Timestamp", "Etag", "TableTimestamp")) {
+            $updatedEntity.Properties.Add($prop.Name, $prop.Value)
+        }
     }
-    catch {
 
-        Write-Warning "Failed to release CIDR lease: $_"
-    }
+    $updatedEntity.ETag = $Row.Etag
+    $updatedEntity.Timestamp = $Row.TableTimestamp
+
+    $Table.Execute([Microsoft.Azure.Cosmos.Table.TableOperation]::Replace($updatedEntity)) | Out-Null
 }
 
 # ----------------------------
@@ -321,6 +298,8 @@ if ($cidrStoreEnabled) {
     }
 }
 
+$cidrDryRunAllocations = @{}
+
 # ----------------------------
 # Automatic global /16 allocation
 # ----------------------------
@@ -342,9 +321,7 @@ function Get-BaseCidrForSubscription {
 
     param([string]$SubscriptionId)
 
-    $rows = Invoke-InCidrStoreSubscription {
-        Get-AzTableRow -Table $cidrTable -PartitionKey "CIDR"
-    }
+    $rows = Get-CidrAllocationRows
 
     $entry = $rows |
         Where-Object RowKey -eq $SubscriptionId
@@ -362,41 +339,85 @@ function Get-OrCreateSubscriptionAllocation {
         [string]$SubscriptionId
     )
 
-    $rows = Invoke-InCidrStoreSubscription {
-
-        Get-AzTableRow -Table $cidrTable -PartitionKey "CIDR"
-    }
-
-    $entry = $rows | Where-Object RowKey -eq $SubscriptionId
+    $entry = Get-CidrSubscriptionAllocation -SubscriptionId $SubscriptionId
 
     if ($entry) {
         return $entry
     }
 
-    $assignedCidrs = @(
-        $rows | Select-Object -ExpandProperty BaseCidr
-    )
+    Invoke-CidrConcurrencyRetry -ScriptBlock {
+        $rows = Get-CidrAllocationRows
 
-    $nextCidr = Get-NextFreeBaseCidr -ExistingCidrs $assignedCidrs
+        $entry = $rows | Where-Object RowKey -eq $SubscriptionId
 
-    Invoke-InCidrStoreSubscription {
+        if ($entry) {
+            return $entry
+        }
 
-        Add-AzTableRow `
-            -Table $cidrTable `
-            -PartitionKey "CIDR" `
-            -RowKey $SubscriptionId `
-            -Properties @{
-                BaseCidr = $nextCidr
-                NextIndex = 0
-            } | Out-Null
-    }
+        $assignedCidrs = @(
+            $rows | Select-Object -ExpandProperty BaseCidr
+        )
 
-    return Invoke-InCidrStoreSubscription {
+        $state = Get-CidrAllocatorState
 
-        Get-AzTableRow `
-            -Table $cidrTable `
-            -PartitionKey "CIDR" `
-            -RowKey $SubscriptionId
+        if (-not $state) {
+            $nextBaseOctet = 2
+            $assignedOctets = @(
+                $assignedCidrs |
+                    Where-Object { $_ -match '^10\.(\d+)\.0\.0/16$' } |
+                    ForEach-Object { [int]$Matches[1] }
+            )
+
+            if ($assignedOctets.Count -gt 0) {
+                $nextBaseOctet = (($assignedOctets | Measure-Object -Maximum).Maximum + 1)
+            }
+
+            Invoke-InCidrStoreSubscription {
+                Add-AzTableRow `
+                    -Table $cidrTable `
+                    -PartitionKey "CIDR_STATE" `
+                    -RowKey "GLOBAL" `
+                    -property @{
+                        NextBaseOctet = $nextBaseOctet
+                    } `
+                    -ErrorAction Stop | Out-Null
+            }
+
+            $state = Get-CidrAllocatorState
+        }
+
+        $candidateOctet = [int]$state.NextBaseOctet
+        do {
+            if ($candidateOctet -gt 255) {
+                throw "No available /16 CIDR blocks remaining in 10.2.0.0/16 - 10.255.0.0/16"
+            }
+
+            $nextCidr = "10.$candidateOctet.0.0/16"
+            $candidateOctet++
+        } while ($assignedCidrs -contains $nextCidr)
+
+        $state.NextBaseOctet = $candidateOctet
+
+        Invoke-InCidrStoreSubscription {
+            Update-CidrTableRowWithEtag `
+                -Table $cidrTable `
+                -Row $state
+
+            Add-AzTableRow `
+                -Table $cidrTable `
+                -PartitionKey "CIDR" `
+                -RowKey $SubscriptionId `
+                -property @{
+                    BaseCidr = $nextCidr
+                    NextIndex = 0
+                } `
+                -ErrorAction Stop | Out-Null
+
+            Get-AzTableRow `
+                -Table $cidrTable `
+                -PartitionKey "CIDR" `
+                -RowKey $SubscriptionId
+        }
     }
 }
 
@@ -404,7 +425,8 @@ function Get-NextSubnetCidr {
 
     param(
         [string]$SubscriptionId,
-        [int]$PrefixLength = 24
+        [int]$PrefixLength = 24,
+        [switch]$Preview
     )
 
     if (-not $cidrStoreEnabled) {
@@ -414,10 +436,73 @@ function Get-NextSubnetCidr {
         return $subnets[0]
     }
 
-    $lease = Request-CidrLease -StorageAccountName $CidrStoreAccountName
+    if ($Preview) {
+        if (-not $cidrDryRunAllocations.ContainsKey($SubscriptionId)) {
+            $entry = Get-CidrSubscriptionAllocation -SubscriptionId $SubscriptionId
 
-    try {
+            if ($entry) {
+                $cidrDryRunAllocations[$SubscriptionId] = [pscustomobject]@{
+                    BaseCidr = $entry.BaseCidr
+                    NextIndex = [int]$entry.NextIndex
+                }
+            }
+            else {
+                $rows = Get-CidrAllocationRows
+                $assignedCidrs = @(
+                    $rows | Select-Object -ExpandProperty BaseCidr
+                )
 
+                $assignedCidrs += @(
+                    $cidrDryRunAllocations.Values | Select-Object -ExpandProperty BaseCidr
+                )
+
+                $state = Get-CidrAllocatorState
+                if ($state) {
+                    $candidateOctet = [int]$state.NextBaseOctet
+                }
+                else {
+                    $candidateOctet = 2
+                    $assignedOctets = @(
+                        $assignedCidrs |
+                            Where-Object { $_ -match '^10\.(\d+)\.0\.0/16$' } |
+                            ForEach-Object { [int]$Matches[1] }
+                    )
+
+                    if ($assignedOctets.Count -gt 0) {
+                        $candidateOctet = (($assignedOctets | Measure-Object -Maximum).Maximum + 1)
+                    }
+                }
+
+                do {
+                    if ($candidateOctet -gt 255) {
+                        throw "No available /16 CIDR blocks remaining in 10.2.0.0/16 - 10.255.0.0/16"
+                    }
+
+                    $baseCidr = "10.$candidateOctet.0.0/16"
+                    $candidateOctet++
+                } while ($assignedCidrs -contains $baseCidr)
+
+                $cidrDryRunAllocations[$SubscriptionId] = [pscustomobject]@{
+                    BaseCidr = $baseCidr
+                    NextIndex = 0
+                }
+            }
+        }
+
+        $previewAllocation = $cidrDryRunAllocations[$SubscriptionId]
+        $subnets = Get-Subnets -BaseCidr $previewAllocation.BaseCidr -NewPrefix $PrefixLength
+
+        if ($previewAllocation.NextIndex -ge $subnets.Count) {
+            throw "CIDR exhausted in $($previewAllocation.BaseCidr)"
+        }
+
+        $nextSubnet = $subnets[$previewAllocation.NextIndex]
+        $previewAllocation.NextIndex++
+
+        return $nextSubnet
+    }
+
+    Invoke-CidrConcurrencyRetry -ScriptBlock {
         $entry = Get-OrCreateSubscriptionAllocation -SubscriptionId $SubscriptionId
 
         $baseCidr = $entry.BaseCidr
@@ -436,14 +521,12 @@ function Get-NextSubnetCidr {
 
         Invoke-InCidrStoreSubscription {
 
-            Update-AzTableRow -Table $cidrTable -Row $entry | Out-Null
+            Update-CidrTableRowWithEtag `
+                -Table $cidrTable `
+                -Row $entry
         }
 
         return $nextSubnet
-    }
-    finally {
-
-        Unlock-CidrLease -Lease $lease
     }
 }
 
@@ -470,8 +553,8 @@ foreach ($rg in $rgs) {
     }
 
     if (-not $vnet) {
-        $cidr = Get-NextSubnetCidr -SubscriptionId $spokeSubId -PrefixLength $VnetPrefixLength
-        Write-Output "[CREATE] $vnetName → $cidr"
+        $cidr = Get-NextSubnetCidr -SubscriptionId $spokeSubId -PrefixLength $VnetPrefixLength -Preview:$DryRun
+        Write-Output "[CREATE] $vnetName -> $cidr"
 
         if (-not $DryRun) {
             $subnetCidr = (Get-Subnets -BaseCidr $cidr -NewPrefix $SubnetPrefixLength)[0]
@@ -516,7 +599,7 @@ foreach ($rg in $rgs) {
             Get-AzVirtualNetworkPeering -VirtualNetworkName $vnet.Name -ResourceGroupName $rg.ResourceGroupName -Name "$($vnet.Name)-to-fw" -ErrorAction SilentlyContinue
         }
         if (-not $peer) {
-            Write-Output "[PEER] $($vnet.Name) → firewall"
+            Write-Output "[PEER] $($vnet.Name) -> firewall"
 
             if (-not $DryRun) {
                 Invoke-InSpokeSubscription {
