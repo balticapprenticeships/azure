@@ -1,10 +1,10 @@
 <#
-.version 3.0.0
+.version 3.1.0
 .AUTHOR Chris Langford
 .SYNOPSIS
     This script automates the creation of spoke virtual networks in each resource group of a subscription, assigns them CIDR blocks from a defined range, and peers them with a central firewall VNet. It also tags the VNets and applies a resource lock to prevent accidental deletion.
 .DESCRIPTION
-    The script connects to Azure using a Managed Identity, iterates through resource groups (with optional exclusion patterns), creates a VNet in each RG if it doesn't exist, assigns CIDR blocks (with optional persistence in a storage table), tags the VNets, applies a "DoNotDelete" lock, and peers them with a central firewall VNet in another subscription.
+    The script connects to Azure using a Managed Identity, iterates through resource groups (with optional exclusion patterns), creates a VNet and network security group in each RG if the VNet doesn't exist, assigns CIDR blocks (with optional persistence in a storage table), tags the VNets, applies a "DoNotDelete" lock, and peers them with a central firewall VNet in another subscription.
 .PARAMETER SubscriptionId
     The subscription ID where the spoke VNets will be created. If not provided, it will attempt to read from an Automation Variable named 'SubscriptionId'.
 .PARAMETER FirewallSubscriptionId
@@ -19,10 +19,14 @@
     The prefix length for the spoke VNets. Default is 24.
 .PARAMETER SubnetPrefixLength
     The prefix length for the subnets within each spoke VNet. Default is 26.
+.PARAMETER BaseCidr
+    The base CIDR block to allocate from. Default is "10.0.0.0/16".
+.PARAMETER CidrStoreEnabled
+    A boolean indicating whether to use a storage account for CIDR persistence. Default is $false (automatic in-memory allocation). If enabled, the script will store CIDR allocations in an Azure Table for durability and concurrency control across multiple runs or instances.
 .PARAMETER StorageAccountResourceGroup
     The resource group where the CIDR storage account is located. Default is "NetworkAutomationRg".
 .PARAMETER CidrStoreAccountName
-    The name of the storage account to use for CIDR persistence. Default is "cidrstoresa".
+    The name of the storage account to use for CIDR persistence. Default is "cidrstoresa".S
 .PARAMETER CidrStoreSubscriptionId
     The subscription ID where the CIDR storage account is located. Defaults to FirewallSubscriptionId.
 .PARAMETER CidrStoreTableName
@@ -206,6 +210,16 @@ function Get-CidrAllocationRows {
     }
 }
 
+function Get-CidrVnetAllocationRows {
+    param([string]$SubscriptionId)
+
+    $allocationPrefix = "$SubscriptionId|"
+
+    Invoke-InCidrStoreSubscription {
+        Get-AzTableRow -Table $cidrTable -PartitionKey "CIDR_ALLOCATIONS"
+    } | Where-Object RowKey -like "$allocationPrefix*"
+}
+
 function Get-CidrAllocatorState {
     Invoke-InCidrStoreSubscription {
         Get-AzTableRow `
@@ -223,6 +237,63 @@ function Get-CidrSubscriptionAllocation {
             -Table $cidrTable `
             -PartitionKey "CIDR" `
             -RowKey $SubscriptionId
+    }
+}
+
+function Get-CidrVnetAllocationRowKey {
+    param(
+        [string]$SubscriptionId,
+        [string]$ResourceGroupName,
+        [string]$VnetName
+    )
+
+    return "$SubscriptionId|$ResourceGroupName|$VnetName"
+}
+
+function Get-CidrVnetAllocation {
+    param(
+        [string]$SubscriptionId,
+        [string]$ResourceGroupName,
+        [string]$VnetName
+    )
+
+    $rowKey = Get-CidrVnetAllocationRowKey `
+        -SubscriptionId $SubscriptionId `
+        -ResourceGroupName $ResourceGroupName `
+        -VnetName $VnetName
+
+    Invoke-InCidrStoreSubscription {
+        Get-AzTableRow `
+            -Table $cidrTable `
+            -PartitionKey "CIDR_ALLOCATIONS" `
+            -RowKey $rowKey
+    }
+}
+
+function Remove-CidrVnetAllocation {
+    param(
+        [string]$SubscriptionId,
+        [string]$ResourceGroupName,
+        [string]$VnetName
+    )
+
+    try {
+        $allocation = Get-CidrVnetAllocation `
+            -SubscriptionId $SubscriptionId `
+            -ResourceGroupName $ResourceGroupName `
+            -VnetName $VnetName
+
+        if ($allocation) {
+            Invoke-InCidrStoreSubscription {
+                Remove-AzTableRow `
+                    -Table $cidrTable `
+                    -entity $allocation `
+                    -ErrorAction Stop | Out-Null
+            }
+        }
+    }
+    catch {
+        Write-Warning "Failed to remove CIDR allocation for '$VnetName': $_"
     }
 }
 
@@ -275,6 +346,24 @@ function Get-Subnets {
         $subnets += "$ip/$NewPrefix"
     }
     return $subnets
+}
+
+function Get-FirstFreeSubnetCidr {
+    param(
+        [string]$BaseCidr,
+        [int]$PrefixLength,
+        [string[]]$UsedCidrs
+    )
+
+    $subnets = Get-Subnets -BaseCidr $BaseCidr -NewPrefix $PrefixLength
+
+    foreach ($subnet in $subnets) {
+        if ($UsedCidrs -notcontains $subnet) {
+            return $subnet
+        }
+    }
+
+    throw "CIDR exhausted in $BaseCidr"
 }
 
 # ----------------------------
@@ -425,8 +514,11 @@ function Get-NextSubnetCidr {
 
     param(
         [string]$SubscriptionId,
+        [string]$ResourceGroupName,
+        [string]$VnetName,
         [int]$PrefixLength = 24,
-        [switch]$Preview
+        [switch]$Preview,
+        [string[]]$ExistingVnetCidrs = @()
     )
 
     if (-not $cidrStoreEnabled) {
@@ -437,11 +529,35 @@ function Get-NextSubnetCidr {
     }
 
     if ($Preview) {
-        if (-not $cidrDryRunAllocations.ContainsKey($SubscriptionId)) {
+        $allocationKey = Get-CidrVnetAllocationRowKey `
+            -SubscriptionId $SubscriptionId `
+            -ResourceGroupName $ResourceGroupName `
+            -VnetName $VnetName
+
+        if ($cidrDryRunAllocations.ContainsKey($allocationKey)) {
+            return $cidrDryRunAllocations[$allocationKey].VnetCidr
+        }
+
+        $existingAllocation = Get-CidrVnetAllocation `
+            -SubscriptionId $SubscriptionId `
+            -ResourceGroupName $ResourceGroupName `
+            -VnetName $VnetName
+
+        if ($existingAllocation) {
+            $cidrDryRunAllocations[$allocationKey] = [pscustomobject]@{
+                BaseCidr = $existingAllocation.BaseCidr
+                VnetCidr = $existingAllocation.VnetCidr
+            }
+
+            return $existingAllocation.VnetCidr
+        }
+
+        $subscriptionPreviewKey = "$SubscriptionId|SUBSCRIPTION"
+        if (-not $cidrDryRunAllocations.ContainsKey($subscriptionPreviewKey)) {
             $entry = Get-CidrSubscriptionAllocation -SubscriptionId $SubscriptionId
 
             if ($entry) {
-                $cidrDryRunAllocations[$SubscriptionId] = [pscustomobject]@{
+                $cidrDryRunAllocations[$subscriptionPreviewKey] = [pscustomobject]@{
                     BaseCidr = $entry.BaseCidr
                     NextIndex = [int]$entry.NextIndex
                 }
@@ -482,48 +598,92 @@ function Get-NextSubnetCidr {
                     $candidateOctet++
                 } while ($assignedCidrs -contains $baseCidr)
 
-                $cidrDryRunAllocations[$SubscriptionId] = [pscustomobject]@{
+                $cidrDryRunAllocations[$subscriptionPreviewKey] = [pscustomobject]@{
                     BaseCidr = $baseCidr
                     NextIndex = 0
                 }
             }
         }
 
-        $previewAllocation = $cidrDryRunAllocations[$SubscriptionId]
-        $subnets = Get-Subnets -BaseCidr $previewAllocation.BaseCidr -NewPrefix $PrefixLength
+        $previewAllocation = $cidrDryRunAllocations[$subscriptionPreviewKey]
+        $allocationRows = Get-CidrVnetAllocationRows -SubscriptionId $SubscriptionId
+        $usedCidrs = @(
+            $allocationRows | Select-Object -ExpandProperty VnetCidr
+        )
 
-        if ($previewAllocation.NextIndex -ge $subnets.Count) {
-            throw "CIDR exhausted in $($previewAllocation.BaseCidr)"
+        $usedCidrs += @(
+            $ExistingVnetCidrs | Where-Object { $_ -in (Get-Subnets -BaseCidr $previewAllocation.BaseCidr -NewPrefix $PrefixLength) }
+        )
+
+        $usedCidrs += @(
+            $cidrDryRunAllocations.Values |
+                Where-Object { $_.PSObject.Properties.Name -contains "VnetCidr" } |
+                Select-Object -ExpandProperty VnetCidr
+        )
+
+        $nextSubnet = Get-FirstFreeSubnetCidr `
+            -BaseCidr $previewAllocation.BaseCidr `
+            -PrefixLength $PrefixLength `
+            -UsedCidrs $usedCidrs
+
+        $cidrDryRunAllocations[$allocationKey] = [pscustomobject]@{
+            BaseCidr = $previewAllocation.BaseCidr
+            VnetCidr = $nextSubnet
         }
-
-        $nextSubnet = $subnets[$previewAllocation.NextIndex]
-        $previewAllocation.NextIndex++
 
         return $nextSubnet
     }
 
     Invoke-CidrConcurrencyRetry -ScriptBlock {
+        $existingAllocation = Get-CidrVnetAllocation `
+            -SubscriptionId $SubscriptionId `
+            -ResourceGroupName $ResourceGroupName `
+            -VnetName $VnetName
+
+        if ($existingAllocation) {
+            return $existingAllocation.VnetCidr
+        }
+
         $entry = Get-OrCreateSubscriptionAllocation -SubscriptionId $SubscriptionId
 
         $baseCidr = $entry.BaseCidr
 
-        $index = [int]$entry.NextIndex
-
+        $allocationRows = Get-CidrVnetAllocationRows -SubscriptionId $SubscriptionId
         $subnets = Get-Subnets -BaseCidr $baseCidr -NewPrefix $PrefixLength
 
-        if ($index -ge $subnets.Count) {
-            throw "CIDR exhausted in $baseCidr"
-        }
+        $usedCidrs = @(
+            $allocationRows | Select-Object -ExpandProperty VnetCidr
+        )
 
-        $nextSubnet = $subnets[$index]
+        $usedCidrs += @(
+            $ExistingVnetCidrs | Where-Object { $_ -in $subnets }
+        )
 
-        $entry.NextIndex = $index + 1
+        $nextSubnet = Get-FirstFreeSubnetCidr `
+            -BaseCidr $baseCidr `
+            -PrefixLength $PrefixLength `
+            -UsedCidrs $usedCidrs
+
+        $entry.NextIndex = ([array]::IndexOf($subnets, $nextSubnet) + 1)
 
         Invoke-InCidrStoreSubscription {
 
             Update-CidrTableRowWithEtag `
                 -Table $cidrTable `
                 -Row $entry
+
+            Add-AzTableRow `
+                -Table $cidrTable `
+                -PartitionKey "CIDR_ALLOCATIONS" `
+                -RowKey (Get-CidrVnetAllocationRowKey -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -VnetName $VnetName) `
+                -property @{
+                    SubscriptionId = $SubscriptionId
+                    ResourceGroupName = $ResourceGroupName
+                    VnetName = $VnetName
+                    BaseCidr = $baseCidr
+                    VnetCidr = $nextSubnet
+                } `
+                -ErrorAction Stop | Out-Null
         }
 
         return $nextSubnet
@@ -543,6 +703,14 @@ $rgs = Invoke-InSpokeSubscription {
     }
 }
 
+$existingVnetCidrs = @(
+    Invoke-InSpokeSubscription {
+        Get-AzVirtualNetwork | ForEach-Object {
+            $_.AddressSpace.AddressPrefixes
+        }
+    }
+)
+
 # ----------------------------
 # VNet creation loop
 # ----------------------------
@@ -553,14 +721,78 @@ foreach ($rg in $rgs) {
     }
 
     if (-not $vnet) {
-        $cidr = Get-NextSubnetCidr -SubscriptionId $spokeSubId -PrefixLength $VnetPrefixLength -Preview:$DryRun
+        $cidr = Get-NextSubnetCidr `
+            -SubscriptionId $spokeSubId `
+            -ResourceGroupName $rg.ResourceGroupName `
+            -VnetName $vnetName `
+            -PrefixLength $VnetPrefixLength `
+            -Preview:$DryRun `
+            -ExistingVnetCidrs $existingVnetCidrs
+
         Write-Output "[CREATE] $vnetName -> $cidr"
 
         if (-not $DryRun) {
-            $subnetCidr = (Get-Subnets -BaseCidr $cidr -NewPrefix $SubnetPrefixLength)[0]
-            $subnet = New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix $subnetCidr
-            $vnet = Invoke-InSpokeSubscription {
-                New-AzVirtualNetwork -Name $vnetName -ResourceGroupName $rg.ResourceGroupName -Location $rg.Location -AddressPrefix $cidr -Subnet $subnet -Tag $Tags
+            $nsgName = "$($rg.Location)-$($rg.ResourceGroupName)-nsg"
+            $nsgCreated = $false
+
+            try {
+                $subnetCidr = (Get-Subnets -BaseCidr $cidr -NewPrefix $SubnetPrefixLength)[0]
+
+                $rdpRule = New-AzNetworkSecurityRuleConfig `
+                    -Name "Allow-RDP-Internet" `
+                    -Description "Allow inbound RDP from the internet." `
+                    -Access Allow `
+                    -Protocol Tcp `
+                    -Direction Inbound `
+                    -Priority 1000 `
+                    -SourceAddressPrefix Internet `
+                    -SourcePortRange "*" `
+                    -DestinationAddressPrefix "*" `
+                    -DestinationPortRange 3389
+
+                $nsg = Invoke-InSpokeSubscription {
+                    New-AzNetworkSecurityGroup `
+                        -Name $nsgName `
+                        -ResourceGroupName $rg.ResourceGroupName `
+                        -Location $rg.Location `
+                        -SecurityRules $rdpRule `
+                        -Tag $Tags
+                }
+                $nsgCreated = $true
+
+                $subnet = New-AzVirtualNetworkSubnetConfig `
+                    -Name "default" `
+                    -AddressPrefix $subnetCidr `
+                    -NetworkSecurityGroup $nsg
+
+                $vnet = Invoke-InSpokeSubscription {
+                    New-AzVirtualNetwork -Name $vnetName -ResourceGroupName $rg.ResourceGroupName -Location $rg.Location -AddressPrefix $cidr -Subnet $subnet -Tag $Tags
+                }
+
+                $existingVnetCidrs += $cidr
+            }
+            catch {
+                Remove-CidrVnetAllocation `
+                    -SubscriptionId $spokeSubId `
+                    -ResourceGroupName $rg.ResourceGroupName `
+                    -VnetName $vnetName
+
+                if ($nsgCreated) {
+                    try {
+                        Invoke-InSpokeSubscription {
+                            Remove-AzNetworkSecurityGroup `
+                                -Name $nsgName `
+                                -ResourceGroupName $rg.ResourceGroupName `
+                                -Force `
+                                -ErrorAction Stop | Out-Null
+                        }
+                    }
+                    catch {
+                        Write-Warning "Failed to remove network security group '$nsgName' after VNet creation failed: $_"
+                    }
+                }
+
+                throw
             }
         }
     } else {
