@@ -1,5 +1,5 @@
 <#
-.version 3.1.0
+.version 3.1.1
 .AUTHOR Chris Langford
 .SYNOPSIS
     This script automates the creation of spoke virtual networks in each resource group of a subscription, assigns them CIDR blocks from a defined range, and peers them with a central firewall VNet. It also tags the VNets and applies a resource lock to prevent accidental deletion.
@@ -302,12 +302,20 @@ function Update-CidrTableRowWithEtag {
         [Parameter(Mandatory=$true)]
         $Table,
         [Parameter(Mandatory=$true)]
-        $Row
+        $Row,
+        [Parameter(Mandatory=$true)]
+        [string]$PartitionKey,
+        [Parameter(Mandatory=$true)]
+        [string]$RowKey
     )
+
+    if ([string]::IsNullOrWhiteSpace($PartitionKey) -or [string]::IsNullOrWhiteSpace($RowKey)) {
+        throw "Cannot update CIDR table row because PartitionKey or RowKey is empty."
+    }
 
     $updatedEntity = New-Object `
         -TypeName "Microsoft.Azure.Cosmos.Table.DynamicTableEntity" `
-        -ArgumentList $Row.PartitionKey, $Row.RowKey
+        -ArgumentList $PartitionKey, $RowKey
 
     foreach ($prop in $Row.psobject.Properties) {
         if ($prop.Name -notin @("PartitionKey", "RowKey", "Timestamp", "Etag", "TableTimestamp")) {
@@ -367,7 +375,7 @@ function Get-FirstFreeSubnetCidr {
 }
 
 # ----------------------------
-# CIDR persistence (optional)
+# CIDR persistence
 # ----------------------------
 $cidrStoreEnabled = ($CidrStoreAccountName -and $CidrStoreTableName)
 if ($cidrStoreEnabled) {
@@ -490,7 +498,9 @@ function Get-OrCreateSubscriptionAllocation {
         Invoke-InCidrStoreSubscription {
             Update-CidrTableRowWithEtag `
                 -Table $cidrTable `
-                -Row $state
+                -Row $state `
+                -PartitionKey "CIDR_STATE" `
+                -RowKey "GLOBAL"
 
             Add-AzTableRow `
                 -Table $cidrTable `
@@ -670,7 +680,9 @@ function Get-NextSubnetCidr {
 
             Update-CidrTableRowWithEtag `
                 -Table $cidrTable `
-                -Row $entry
+                -Row $entry `
+                -PartitionKey "CIDR" `
+                -RowKey $SubscriptionId
 
             Add-AzTableRow `
                 -Table $cidrTable `
