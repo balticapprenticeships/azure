@@ -145,7 +145,7 @@ function Send-TeamsRunbookCard {
         [bool]$DryRun
     )
 
-    if ([string]::IsNullOrWhiteSpace($WebhookUrl)) {
+    if ([string]::IsNullOrWhiteSpace($teamsWebhookUrl)) {
         return
     }
 
