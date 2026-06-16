@@ -1,5 +1,5 @@
 <#
-.version 3.1.16
+.version 3.1.17
 .AUTHOR Chris Langford
 .SYNOPSIS
     This script automates the creation of spoke virtual networks in each resource group of a subscription, assigns them CIDR blocks from a defined range, and peers them with a central firewall VNet. It also tags the VNets and applies a resource lock to prevent accidental deletion.
@@ -68,6 +68,10 @@ param(
 
     [string[]]$ExcludeRgPattern = @("OMSrg$", "NetworkWatcherRG", "DefaultResourceGroup-"),
 
+    [Parameter(Mandatory=$false)]
+    [ValidatePattern('^https://.*')]
+    [string] $teamsWebhookUrl,
+
     [bool]$DryRun = $true
 )
 
@@ -115,6 +119,129 @@ catch {
 $spokeSubId = (Get-AzContext).Subscription.Id
 if (-not $CidrStoreSubscriptionId) {
     $CidrStoreSubscriptionId = $FirewallSubscriptionId
+}
+
+# Teams webhook URL can be provided as a parameter or retrieved from an Automation Variable.
+if (-not $teamsWebhookUrl) {
+    try {
+        $teamsWebhookUrl = Get-AutomationVariable -Name 'TeamsWebhookUrlSpokeCreateAndPeer'
+    }
+    catch {
+        Write-Verbose "No Teams webhook URL provided or found."
+    }
+}
+
+function Send-TeamsRunbookCard {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$teamsWebhookUrl,
+        [Parameter(Mandatory=$true)]
+        [object[]]$Results,
+        [Parameter(Mandatory=$true)]
+        [string]$SubscriptionName,
+        [Parameter(Mandatory=$true)]
+        [string]$SubscriptionId,
+        [Parameter(Mandatory=$true)]
+        [bool]$DryRun
+    )
+
+    if ([string]::IsNullOrWhiteSpace($WebhookUrl)) {
+        return
+    }
+
+    $created = @($Results | Where-Object { $_.VNetState -eq "Created" }).Count
+    $existing = @($Results | Where-Object { $_.VNetState -eq "Exists" }).Count
+    $dryRunCount = @($Results | Where-Object { $_.DryRun }).Count
+    $lockIssues = @($Results | Where-Object { $_.LockState -in @("Skipped", "Failed") -or $_.NsgLockState -in @("Skipped", "Failed", "NotFound") }).Count
+    $peeringIssues = @($Results | Where-Object { $_.PeeringState -in @("SkippedOverlap", "Failed") }).Count
+
+    $resultContainers = @(
+        $Results | Select-Object -First 15 | ForEach-Object {
+            $subnetText = if ($_.SubnetCidr) { "$($_.SubnetName) $($_.SubnetCidr)" } else { "n/a" }
+            @{
+                type = "Container"
+                separator = $true
+                items = @(
+                    @{
+                        type = "TextBlock"
+                        weight = "Bolder"
+                        text = "$($_.ResourceGroup) / $($_.VNetName)"
+                        wrap = $true
+                    },
+                    @{
+                        type = "FactSet"
+                        facts = @(
+                            @{ title = "Location"; value = "$($_.Location)" },
+                            @{ title = "VNet CIDR"; value = "$($_.VNetCidr)" },
+                            @{ title = "Subnet"; value = $subnetText },
+                            @{ title = "NSG"; value = "$($_.NsgName)" },
+                            @{ title = "VNet"; value = "$($_.VNetState)" },
+                            @{ title = "VNet Lock"; value = "$($_.LockState)" },
+                            @{ title = "NSG Lock"; value = "$($_.NsgLockState)" },
+                            @{ title = "Peering"; value = "$($_.PeeringState)" }
+                        )
+                    }
+                )
+            }
+        }
+    )
+
+    if ($Results.Count -gt 15) {
+        $resultContainers += @{
+            type = "TextBlock"
+            isSubtle = $true
+            wrap = $true
+            text = "Showing first 15 of $($Results.Count) resource groups. See runbook output for the full result set."
+        }
+    }
+
+    $payload = @{
+        type = "message"
+        attachments = @(
+            @{
+                contentType = "application/vnd.microsoft.card.adaptive"
+                contentUrl = $null
+                content = @{
+                    '$schema' = "http://adaptivecards.io/schemas/adaptive-card.json"
+                    type = "AdaptiveCard"
+                    version = "1.4"
+                    body = @(
+                        @{
+                            type = "TextBlock"
+                            size = "Large"
+                            weight = "Bolder"
+                            text = "Spoke VNet Runbook Complete"
+                            wrap = $true
+                        },
+                        @{
+                            type = "FactSet"
+                            facts = @(
+                                @{ title = "Subscription"; value = "$SubscriptionName ($SubscriptionId)" },
+                                @{ title = "Dry run"; value = "$DryRun" },
+                                @{ title = "Resource groups"; value = "$($Results.Count)" },
+                                @{ title = "Created"; value = "$created" },
+                                @{ title = "Existing"; value = "$existing" },
+                                @{ title = "Dry-run items"; value = "$dryRunCount" },
+                                @{ title = "Lock issues"; value = "$lockIssues" },
+                                @{ title = "Peering issues"; value = "$peeringIssues" }
+                            )
+                        }
+                    ) + $resultContainers
+                }
+            }
+        )
+    }
+
+    try {
+        Invoke-RestMethod `
+            -Method Post `
+            -Uri $teamsWebhookUrl `
+            -ContentType "application/json" `
+            -Body ($payload | ConvertTo-Json -Depth 30) | Out-Null
+    }
+    catch {
+        Write-Warning "Failed to send Teams Adaptive Card: $_"
+    }
 }
 
 # ----------------------------
@@ -948,8 +1075,19 @@ $existingVnetCidrs = @(
 # ----------------------------
 # VNet creation loop
 # ----------------------------
+$runResults = @()
+
 foreach ($rg in $rgs) {
     $vnetName = "$($rg.ResourceGroupName.ToLower())-vnet"
+    $cidr = $null
+    $subnetName = "default"
+    $subnetCidr = $null
+    $nsgName = "$($rg.ResourceGroupName)-nsg"
+    $vnetState = "Unknown"
+    $lockState = if ($DryRun) { "DryRun" } else { "NotChecked" }
+    $nsgLockState = if ($DryRun) { "DryRun" } else { "NotChecked" }
+    $peeringState = if ($DryRun) { "DryRun" } else { "Exists" }
+
     $vnet = Invoke-InSpokeSubscription {
         Get-AzVirtualNetwork -ResourceGroupName $rg.ResourceGroupName -Name $vnetName -ErrorAction SilentlyContinue
     }
@@ -963,15 +1101,15 @@ foreach ($rg in $rgs) {
             -Preview:$DryRun `
             -ExistingVnetCidrs $existingVnetCidrs
 
+        $subnetCidr = (Get-Subnets -BaseCidr $cidr -NewPrefix $SubnetPrefixLength)[0]
+        $vnetState = if ($DryRun) { "WouldCreate" } else { "Created" }
+
         Write-Output "[CREATE] $vnetName -> $cidr"
 
         if (-not $DryRun) {
-            $nsgName = "$($rg.ResourceGroupName)-nsg"
             $nsgCreated = $false
 
             try {
-                $subnetCidr = (Get-Subnets -BaseCidr $cidr -NewPrefix $SubnetPrefixLength)[0]
-
                 $rdpRule = New-AzNetworkSecurityRuleConfig `
                     -Name "Allow-RDP-Internet" `
                     -Description "Allow inbound RDP from the internet." `
@@ -1030,6 +1168,19 @@ foreach ($rg in $rgs) {
             }
         }
     } else {
+        $cidr = @($vnet.AddressSpace.AddressPrefixes) -join ", "
+        $defaultSubnet = @($vnet.Subnets | Where-Object { $_.Name -eq $subnetName } | Select-Object -First 1)
+        if (-not $defaultSubnet) {
+            $defaultSubnet = @($vnet.Subnets | Select-Object -First 1)
+        }
+        if ($defaultSubnet) {
+            $subnetName = $defaultSubnet[0].Name
+            $subnetCidr = @($defaultSubnet[0].AddressPrefix) -join ", "
+            if ($defaultSubnet[0].NetworkSecurityGroup -and $defaultSubnet[0].NetworkSecurityGroup.Id) {
+                $nsgName = ($defaultSubnet[0].NetworkSecurityGroup.Id -split "/")[-1]
+            }
+        }
+        $vnetState = "Exists"
         Write-Output "[EXISTS] $vnetName"
     }
 
@@ -1054,15 +1205,60 @@ foreach ($rg in $rgs) {
                 Invoke-InSpokeSubscription {
                     New-AzResourceLock -LockName "DoNotDelete-VNET" -LockLevel CanNotDelete -ResourceName $vnet.Name -ResourceGroupName $rg.ResourceGroupName -ResourceType "Microsoft.Network/virtualNetworks" -Force -ErrorAction Stop | Out-Null
                 }
+                $lockState = "Created"
             }
             catch {
                 if ($_.Exception.Message -match 'AuthorizationFailed|Microsoft.Authorization/locks/write') {
                     Write-Warning "Skipping resource lock for '$($vnet.Name)' because the managed identity does not have Microsoft.Authorization/locks/write at the VNet scope."
+                    $lockState = "Skipped"
                 }
                 else {
+                    $lockState = "Failed"
                     throw
                 }
             }
+        }
+        else {
+            $lockState = "Exists"
+        }
+    }
+
+    # NSG resource lock
+    if (-not $DryRun -and $nsgName) {
+        $nsgForLock = Invoke-InSpokeSubscription {
+            Get-AzNetworkSecurityGroup -Name $nsgName -ResourceGroupName $rg.ResourceGroupName -ErrorAction SilentlyContinue
+        }
+
+        if ($nsgForLock) {
+            $nsgLock = Invoke-InSpokeSubscription {
+                Get-AzResourceLock -ResourceName $nsgForLock.Name -ResourceGroupName $rg.ResourceGroupName -ResourceType "Microsoft.Network/networkSecurityGroups" -ErrorAction SilentlyContinue
+            }
+
+            if (-not $nsgLock) {
+                try {
+                    Invoke-InSpokeSubscription {
+                        New-AzResourceLock -LockName "DoNotDelete-NSG" -LockLevel CanNotDelete -ResourceName $nsgForLock.Name -ResourceGroupName $rg.ResourceGroupName -ResourceType "Microsoft.Network/networkSecurityGroups" -Force -ErrorAction Stop | Out-Null
+                    }
+                    $nsgLockState = "Created"
+                }
+                catch {
+                    if ($_.Exception.Message -match 'AuthorizationFailed|Microsoft.Authorization/locks/write') {
+                        Write-Warning "Skipping resource lock for '$($nsgForLock.Name)' because the managed identity does not have Microsoft.Authorization/locks/write at the NSG scope."
+                        $nsgLockState = "Skipped"
+                    }
+                    else {
+                        $nsgLockState = "Failed"
+                        throw
+                    }
+                }
+            }
+            else {
+                $nsgLockState = "Exists"
+            }
+        }
+        else {
+            $nsgLockState = "NotFound"
+            Write-Warning "Skipping NSG resource lock for '$nsgName' because the network security group was not found in resource group '$($rg.ResourceGroupName)'."
         }
     }
 
@@ -1082,10 +1278,12 @@ foreach ($rg in $rgs) {
 
         if (-not $peer -or -not $fwPeer) {
             Write-Output "[PEER] $($vnet.Name) -> firewall"
+            $peeringState = if ($DryRun) { "DryRun" } else { "Pending" }
 
             if (-not $DryRun) {
                 if (Test-VnetAddressSpaceOverlap -VnetA $vnet -VnetB $fwVnet) {
                     Write-Warning "Skipping peering for '$($vnet.Name)' because its address space overlaps with firewall VNet '$($fwVnet.Name)'."
+                    $peeringState = "SkippedOverlap"
                 }
                 else {
                     try {
@@ -1100,14 +1298,40 @@ foreach ($rg in $rgs) {
                                 Add-AzVirtualNetworkPeering -Name "fw-to-$($vnet.Name)" -VirtualNetwork $fwVnet -RemoteVirtualNetworkId $vnet.Id -AllowForwardedTraffic -ErrorAction Stop | Out-Null
                             }
                         }
+                        $peeringState = "Created"
                     }
                     catch {
                         Write-Warning "Failed to peer '$($vnet.Name)' with firewall VNet '$($fwVnet.Name)': $_"
+                        $peeringState = "Failed"
                     }
                 }
             }
         }
     }
+
+    $runResults += [pscustomobject]@{
+        ResourceGroup = $rg.ResourceGroupName
+        Location = $rg.Location
+        VNetName = $vnetName
+        VNetCidr = $cidr
+        SubnetName = $subnetName
+        SubnetCidr = $subnetCidr
+        NsgName = $nsgName
+        VNetState = $vnetState
+        LockState = $lockState
+        NsgLockState = $nsgLockState
+        PeeringState = $peeringState
+        DryRun = $DryRun
+    }
+}
+
+if ($teamsWebhookUrl) {
+    Send-TeamsRunbookCard `
+        -WebhookUrl $teamsWebhookUrl `
+        -Results $runResults `
+        -SubscriptionName $context.Subscription.Name `
+        -SubscriptionId $spokeSubId `
+        -DryRun $DryRun
 }
 
 Write-Output "Runbook complete."
