@@ -1,5 +1,5 @@
 <#
-.version 3.1.18
+.version 3.1.19
 .AUTHOR Chris Langford
 .SYNOPSIS
     This script automates the creation of spoke virtual networks in each resource group of a subscription, assigns them CIDR blocks from a defined range, and peers them with a central firewall VNet. It also tags the VNets and applies a resource lock to prevent accidental deletion.
@@ -35,6 +35,10 @@
     The name of the table in the storage account to use for CIDR persistence. Default is "CidrAllocation".
 .PARAMETER ExcludeRgPattern
     An array of patterns to exclude resource groups from processing. Default is @("OMSrg$", "NetworkWatcherRG", "DefaultResourceGroup-").
+.PARAMETER IncludeRgTagName
+    The name of a tag to filter resource groups for processing. Only resource groups with this tag name and the specified value will be processed. Default is "SpokeVNetAutomation".
+.PARAMETER IncludeRgTagValue
+    The value of the tag specified in IncludeRgTagName to filter resource groups for processing. Default is "Enabled".
 .PARAMETER DryRun
     A boolean indicating whether to perform a dry run (preview changes without applying them). Default is $true.
 
@@ -72,6 +76,8 @@ param(
     [string]$CidrStoreTableName = "CidrAllocation",
 
     [string[]]$ExcludeRgPattern = @("OMSrg$", "NetworkWatcherRG", "DefaultResourceGroup-"),
+    [string]$IncludeRgTagName = "SpokeVNetAutomation",
+    [string]$IncludeRgTagValue = "Enabled",
 
     [Parameter(Mandatory=$false)]
     [ValidatePattern('^https://.*')]
@@ -1099,7 +1105,22 @@ $rgs = Invoke-InSpokeSubscription {
         foreach ($pattern in $ExcludeRgPattern) {
             if ($_.ResourceGroupName -match $pattern) { $exclude = $true; break }
         }
-        -not $exclude
+
+        if ($exclude) {
+            return $false
+        }
+
+        if ($IncludeRgTagName) {
+            if (-not $_.Tags -or -not $_.Tags.ContainsKey($IncludeRgTagName)) {
+                return $false
+            }
+
+            if ($IncludeRgTagValue -and $_.Tags[$IncludeRgTagName] -ne $IncludeRgTagValue) {
+                return $false
+            }
+        }
+
+        return $true
     }
 }
 
