@@ -1,5 +1,5 @@
 <#
-.version 3.1.17
+.version 3.1.18
 .AUTHOR Chris Langford
 .SYNOPSIS
     This script automates the creation of spoke virtual networks in each resource group of a subscription, assigns them CIDR blocks from a defined range, and peers them with a central firewall VNet. It also tags the VNets and applies a resource lock to prevent accidental deletion.
@@ -7,6 +7,8 @@
     The script connects to Azure using a Managed Identity, iterates through resource groups (with optional exclusion patterns), creates a VNet and network security group in each RG if the VNet doesn't exist, assigns CIDR blocks (with optional persistence in a storage table), tags the VNets, applies a "DoNotDelete" lock, and peers them with a central firewall VNet in another subscription.
 .PARAMETER SubscriptionId
     The subscription ID where the spoke VNets will be created. If not provided, it will attempt to read from an Automation Variable named 'SubscriptionId'.
+.PARAMETER WebhookData
+    The data received from the Event Grid webhook.
 .PARAMETER FirewallSubscriptionId
     The subscription ID where the central firewall VNet is located.
 .PARAMETER FirewallVnetName
@@ -45,6 +47,9 @@
 param(
 
     [Parameter(Mandatory=$false)]
+    [object] $WebhookData,
+
+    [Parameter(Mandatory=$false)]
     [ValidatePattern('^[0-9a-fA-F-]{36}$')]
     [string] $SubscriptionId,
 
@@ -77,6 +82,40 @@ param(
 
 Import-Module Az.Storage -ErrorAction Stop
 Import-Module AzTable -ErrorAction Stop
+
+# ----------------------------
+# Parse Event Grid webhook payload
+# ----------------------------
+if ($WebhookData) {
+    try {
+        $eventGridEvents = ConvertFrom-Json -InputObject $WebhookData.RequestBody
+    }
+    catch {
+        throw "Failed to parse WebhookData.RequestBody as JSON: $_"
+    }
+
+    # Event Grid always delivers an array, even for a single event
+    $rgEvent = $eventGridEvents | Select-Object -First 1
+
+    if (-not $rgEvent) {
+        throw "WebhookData.RequestBody did not contain any events."
+    }
+
+    Write-Output "Triggered by Event Grid event: $($rgEvent.eventType) / subject: $($rgEvent.subject)"
+
+    # Defense in depth - confirm this really is a resource-group write success,
+    # in case the Event Grid subscription filter is ever loosened or misconfigured.
+    if ($rgEvent.data.operationName -ne "Microsoft.Resources/subscriptions/resourceGroups/write" `
+        -or $rgEvent.data.status -ne "Succeeded") {
+        Write-Output "Event is not a successful resource group write. Exiting without action."
+        return
+    }
+
+    # Pull the subscription ID out of the event subject/topic if not explicitly supplied
+    if (-not $SubscriptionId -and $rgEvent.topic -match '/subscriptions/([0-9a-fA-F-]{36})') {
+        $SubscriptionId = $Matches[1]
+    }
+}
 
 # ----------------------------
 # Connect to Azure
@@ -1327,7 +1366,8 @@ foreach ($rg in $rgs) {
 
 if ($teamsWebhookUrl) {
     Send-TeamsRunbookCard `
-        -WebhookUrl $teamsWebhookUrl `
+        -teamsWebhookUrl $teamsWebhookUrl `
+        #-WebhookUrl $teamsWebhookUrl `
         -Results $runResults `
         -SubscriptionName $context.Subscription.Name `
         -SubscriptionId $spokeSubId `
