@@ -1,5 +1,5 @@
 <#
-.version 3.1.19
+.version 3.1.20
 .AUTHOR Chris Langford
 .SYNOPSIS
     This script automates the creation of spoke virtual networks in each resource group of a subscription, assigns them CIDR blocks from a defined range, and peers them with a central firewall VNet. It also tags the VNets and applies a resource lock to prevent accidental deletion.
