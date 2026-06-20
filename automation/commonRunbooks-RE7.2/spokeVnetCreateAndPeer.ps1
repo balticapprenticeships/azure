@@ -1,14 +1,16 @@
 <#
-.version 3.1.20
+.version 3.2.0
 .AUTHOR Chris Langford
 .SYNOPSIS
     This script automates the creation of spoke virtual networks in each resource group of a subscription, assigns them CIDR blocks from a defined range, and peers them with a central firewall VNet. It also tags the VNets and applies a resource lock to prevent accidental deletion.
 .DESCRIPTION
     The script connects to Azure using a Managed Identity, iterates through resource groups (with optional exclusion patterns), creates a VNet and network security group in each RG if the VNet doesn't exist, assigns CIDR blocks (with optional persistence in a storage table), tags the VNets, applies a "DoNotDelete" lock, and peers them with a central firewall VNet in another subscription.
-.PARAMETER SubscriptionId
-    The subscription ID where the spoke VNets will be created. If not provided, it will attempt to read from an Automation Variable named 'SubscriptionId'.
+
+    This version accepts an optional $WebhookData parameter so it can be triggered directly by an Azure Event Grid subscription pointed at an Automation webhook (e.g. on Microsoft.Resources.ResourceWriteSuccess / resource group creation events). When triggered this way, the script extracts the subscription ID from the event payload if -SubscriptionId wasn't explicitly supplied.
 .PARAMETER WebhookData
-    The data received from the Event Grid webhook.
+    Populated automatically by Azure Automation when this runbook is started via webhook (e.g. by an Event Grid event subscription). Contains WebhookName, RequestHeader, and RequestBody properties. Not intended to be supplied manually. If RequestBody contains an Event Grid event for a resource-group write, the script validates it and extracts the subscription ID from it.
+.PARAMETER SubscriptionId
+    The subscription ID where the spoke VNets will be created. If not provided, the script attempts to extract it from $WebhookData (when triggered by Event Grid), then falls back to an Automation Variable named 'SubscriptionId'.
 .PARAMETER FirewallSubscriptionId
     The subscription ID where the central firewall VNet is located.
 .PARAMETER FirewallVnetName
@@ -36,9 +38,11 @@
 .PARAMETER ExcludeRgPattern
     An array of patterns to exclude resource groups from processing. Default is @("OMSrg$", "NetworkWatcherRG", "DefaultResourceGroup-").
 .PARAMETER IncludeRgTagName
-    The name of a tag to filter resource groups for processing. Only resource groups with this tag name and the specified value will be processed. Default is "SpokeVNetAutomation".
+    The resource group tag name required for processing. Default is "SpokeVNetAutomation".
 .PARAMETER IncludeRgTagValue
-    The value of the tag specified in IncludeRgTagName to filter resource groups for processing. Default is "Enabled".
+    The resource group tag value required for processing. Default is "Enabled".
+.PARAMETER TeamsWebhookUrl
+    The Microsoft Teams webhook URL to send a summary of the runbook execution. If not provided, it will attempt to read from an Automation Variable named 'TeamsWebhookUrlSpokeCreateAndPeer'.
 .PARAMETER DryRun
     A boolean indicating whether to perform a dry run (preview changes without applying them). Default is $true.
 
@@ -76,6 +80,7 @@ param(
     [string]$CidrStoreTableName = "CidrAllocation",
 
     [string[]]$ExcludeRgPattern = @("OMSrg$", "NetworkWatcherRG", "DefaultResourceGroup-"),
+
     [string]$IncludeRgTagName = "SpokeVNetAutomation",
     [string]$IncludeRgTagValue = "Enabled",
 
@@ -83,14 +88,30 @@ param(
     [ValidatePattern('^https://.*')]
     [string] $teamsWebhookUrl,
 
-    [bool]$DryRun = $true
+    [Parameter(Mandatory=$false)]
+    $DryRun = $true
 )
 
 Import-Module Az.Storage -ErrorAction Stop
 Import-Module AzTable -ErrorAction Stop
 
 # ----------------------------
-# Parse Event Grid webhook payload
+# Coerce DryRun to a real boolean
+# ----------------------------
+# Azure Automation does not parse parameters out of a webhook's JSON body for you -
+# if a webhook is configured with a fixed parameter set, values like DryRun arrive
+# as strings (e.g. "true"/"false"), not native PowerShell booleans. A strict [bool]
+# parameter type rejects those strings outright, so DryRun is left untyped above and
+# normalized here instead.
+if ($DryRun -is [string]) {
+    $DryRun = [System.Convert]::ToBoolean($DryRun.Trim())
+}
+else {
+    $DryRun = [bool]$DryRun
+}
+
+# ----------------------------
+# Parse Event Grid webhook payload (if triggered by Event Grid via Automation webhook)
 # ----------------------------
 if ($WebhookData) {
     try {
@@ -117,9 +138,18 @@ if ($WebhookData) {
         return
     }
 
-    # Pull the subscription ID out of the event subject/topic if not explicitly supplied
+    # Pull the subscription ID out of the event topic if not explicitly supplied
     if (-not $SubscriptionId -and $rgEvent.topic -match '/subscriptions/([0-9a-fA-F-]{36})') {
         $SubscriptionId = $Matches[1]
+    }
+
+    # Pull the resource group name out of the event subject so this run can be
+    # scoped to just the resource group that triggered it, rather than re-sweeping
+    # every matching resource group in the subscription on every single creation event.
+    # Subject looks like: /subscriptions/<id>/resourceGroups/<name>
+    if ($rgEvent.subject -match '/resourceGroups/([^/]+)$') {
+        $triggeringResourceGroupName = $Matches[1]
+        Write-Output "Scoping this run to the triggering resource group: $triggeringResourceGroupName"
     }
 }
 
@@ -1099,28 +1129,68 @@ function Get-NextSubnetCidr {
 # ----------------------------
 # Filter resource groups
 # ----------------------------
+# When triggered by the Event Grid webhook, scope this run to just the resource
+# group that was created, instead of re-sweeping every matching resource group in
+# the subscription on every single creation event. Manual/scheduled runs (no
+# $triggeringResourceGroupName) keep the original subscription-wide behavior.
 $rgs = Invoke-InSpokeSubscription {
-    Get-AzResourceGroup | Where-Object {
-        $exclude = $false
-        foreach ($pattern in $ExcludeRgPattern) {
-            if ($_.ResourceGroupName -match $pattern) { $exclude = $true; break }
+    if ($triggeringResourceGroupName) {
+        $targetRg = Get-AzResourceGroup -Name $triggeringResourceGroupName -ErrorAction SilentlyContinue
+
+        if (-not $targetRg) {
+            Write-Warning "Resource group '$triggeringResourceGroupName' from the triggering event was not found (it may have been deleted already, or this identity lacks access). No resource groups will be processed this run."
+            return @()
         }
 
-        if ($exclude) {
-            return $false
-        }
+        @($targetRg) | Where-Object {
+            $exclude = $false
+            foreach ($pattern in $ExcludeRgPattern) {
+                if ($_.ResourceGroupName -match $pattern) { $exclude = $true; break }
+            }
 
-        if ($IncludeRgTagName) {
-            if (-not $_.Tags -or -not $_.Tags.ContainsKey($IncludeRgTagName)) {
+            if ($exclude) {
+                Write-Output "Triggering resource group '$($_.ResourceGroupName)' matches an exclude pattern. Skipping."
                 return $false
             }
 
-            if ($IncludeRgTagValue -and $_.Tags[$IncludeRgTagName] -ne $IncludeRgTagValue) {
+            if ($IncludeRgTagName) {
+                if (-not $_.Tags -or -not $_.Tags.ContainsKey($IncludeRgTagName)) {
+                    Write-Output "Triggering resource group '$($_.ResourceGroupName)' does not have the required tag '$IncludeRgTagName'. Skipping."
+                    return $false
+                }
+
+                if ($IncludeRgTagValue -and $_.Tags[$IncludeRgTagName] -ne $IncludeRgTagValue) {
+                    Write-Output "Triggering resource group '$($_.ResourceGroupName)' tag '$IncludeRgTagName' does not equal '$IncludeRgTagValue'. Skipping."
+                    return $false
+                }
+            }
+
+            return $true
+        }
+    }
+    else {
+        Get-AzResourceGroup | Where-Object {
+            $exclude = $false
+            foreach ($pattern in $ExcludeRgPattern) {
+                if ($_.ResourceGroupName -match $pattern) { $exclude = $true; break }
+            }
+
+            if ($exclude) {
                 return $false
             }
-        }
 
-        return $true
+            if ($IncludeRgTagName) {
+                if (-not $_.Tags -or -not $_.Tags.ContainsKey($IncludeRgTagName)) {
+                    return $false
+                }
+
+                if ($IncludeRgTagValue -and $_.Tags[$IncludeRgTagName] -ne $IncludeRgTagValue) {
+                    return $false
+                }
+            }
+
+            return $true
+        }
     }
 }
 
@@ -1388,7 +1458,6 @@ foreach ($rg in $rgs) {
 if ($teamsWebhookUrl) {
     Send-TeamsRunbookCard `
         -teamsWebhookUrl $teamsWebhookUrl `
-        #-WebhookUrl $teamsWebhookUrl `
         -Results $runResults `
         -SubscriptionName $context.Subscription.Name `
         -SubscriptionId $spokeSubId `
