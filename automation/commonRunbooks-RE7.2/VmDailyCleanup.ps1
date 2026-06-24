@@ -1,10 +1,10 @@
 <#
-.VERSION    1.5.4
+.VERSION    1.6.0
 .AUTHOR     Chris Langford
 .COPYRIGHT  (c) 2026 Chris Langford. All rights reserved.
 .TAGS       Azure Automation, PowerShell Runbook, DevOps
-.SYNOPSIS   Cleans up Azure VMs tagged CourseEndDay=<DayOfWeek>, with advanced logging and Teams notifications.
-.DESCRIPTION Removes Azure VMs and associated compute dependencies (NICs, disks, boot diagnostics). Supports WhatIf (dry-run) and rich Teams Adaptive Card reporting.
+.SYNOPSIS   Cleans up Azure VMs and Bastion hosts tagged CourseEndDay=<DayOfWeek>, with advanced logging and Teams notifications.
+.DESCRIPTION Removes Azure VMs and associated compute dependencies (NICs, disks, boot diagnostics), and tagged Azure Bastion hosts with their public IPs. Supports WhatIf (dry-run) and rich Teams Adaptive Card reporting.
 .PARAMETER cleanupEnabled
     A boolean flag to enable or disable actual cleanup. Set to False for testing/logging without deletion.
 .PARAMETER teamsWebhookUrl
@@ -12,11 +12,11 @@
 .PARAMETER WhatIf
     If true, simulates the actions without making any changes. Set to false to perform actual operations.
 .PARAMETER ParallelMode
-    If true, VM deletions will be performed in parallel with a throttle limit. NSG and VNet cleanup will always run sequentially to ensure safe dependency handling.
+    If true, VM deletions will be performed in parallel with a throttle limit. NSG, VNet, and Bastion cleanup will always run sequentially to ensure safe dependency handling.
 .PARAMETER ThrottleLimit
     When ParallelMode is enabled, this parameter controls how many VM deletions run concurrently. Default is 5.
 .NOTES
-    LASTEDIT: 15.04.2026
+    LASTEDIT: 24.06.2026
 #>
 
 param(
@@ -42,6 +42,9 @@ param(
 
     [Parameter(Mandatory=$false)]
     [int] $VMDeletionSettleTimeout = 300,
+
+    [Parameter(Mandatory=$false)]
+    [int] $BastionDeletionTimeout = 900,
 
     [Parameter(Mandatory=$false)]
     [bool] $WhatIf = $true
@@ -73,19 +76,27 @@ $transcript = Join-Path $env:TEMP "DailyCleanupRun_$transcriptTime.txt"
 Start-Transcript -Path $transcript -Force
 
 $global:cleanupResults = @{
-    StartTime      = Get-Date
-    StartTimeStr   = Format-LondonTime (Get-Date)
-    EndTime        = $null
-    EndTimeStr     = $null
-    Duration       = $null
-    VMsTargeted    = 0
-    VMsRemoved     = 0
-    SkippedVMs     = @()
-    FailedVMs      = @()
-    Errors         = 0
-    VMsRemovedRGs  = @()
-    SkippedVMsRGs  = @()
-    FailedVMsRGs   = @()
+    StartTime          = Get-Date
+    StartTimeStr       = Format-LondonTime (Get-Date)
+    EndTime            = $null
+    EndTimeStr         = $null
+    Duration           = $null
+    VMsTargeted        = 0
+    VMsRemoved         = 0
+    SkippedVMs         = @()
+    FailedVMs          = @()
+    Errors             = 0
+    VMsRemovedRGs      = @()
+    SkippedVMsRGs      = @()
+    FailedVMsRGs       = @()
+    BastionsTargeted   = 0
+    BastionsRemoved    = 0
+    SkippedBastions    = @()
+    FailedBastions     = @()
+    BastionErrors      = 0
+    BastionsRemovedRGs = @()
+    SkippedBastionsRGs = @()
+    FailedBastionsRGs  = @()
 }
 
 #–– Authenticate and select subscription ––
@@ -196,8 +207,85 @@ function Remove-VMAndDependencies { param($VM)
     }
 }
 
+#–– Bastion helpers ––
+
+function Wait-ForBastionRemoval {
+    param($ResourceGroupName, $BastionName, [int]$TimeoutSeconds = 900)
+    $elapsed = 0
+    $interval = 15
+    while ($elapsed -lt $TimeoutSeconds) {
+        $b = Get-AzBastion -ResourceGroupName $ResourceGroupName -Name $BastionName -ErrorAction SilentlyContinue
+        if (-not $b) { return $true }
+        Start-Sleep -Seconds $interval
+        $elapsed += $interval
+    }
+    return $false
+}
+
+function Remove-BastionAndDependencies {
+    param($Bastion)
+    try {
+        if ($WhatIf) {
+            Write-Information "[WhatIf] Would remove Bastion '$($Bastion.Name)' in RG '$($Bastion.ResourceGroupName)'"
+            $global:cleanupResults.SkippedBastions += $Bastion.Name
+            $global:cleanupResults.SkippedBastionsRGs += "$($Bastion.Name) (RG: $($Bastion.ResourceGroupName))"
+            return
+        }
+
+        # Capture the public IP config(s) before the Bastion is removed,
+        # since the IPConfigurations disappear along with the resource.
+        $publicIpIds = @()
+        foreach ($ipConfig in $Bastion.IpConfigurations) {
+            if ($ipConfig.PublicIpAddress -and $ipConfig.PublicIpAddress.Id) {
+                $publicIpIds += $ipConfig.PublicIpAddress.Id
+            }
+        }
+
+        # Remove the Bastion host itself. This is typically slow (5-15+ min).
+        $removed = Invoke-WithRetry -MaxRetries 2 -ScriptBlock {
+            Remove-AzBastion -ResourceGroupName $Bastion.ResourceGroupName -Name $Bastion.Name -Force
+        }
+
+        if (-not $removed) {
+            throw "Remove-AzBastion did not succeed after retries for '$($Bastion.Name)'."
+        }
+
+        # Confirm it's actually gone before touching the public IP, since the
+        # IP can't be deleted while still attached to the Bastion resource.
+        $gone = Wait-ForBastionRemoval -ResourceGroupName $Bastion.ResourceGroupName -BastionName $Bastion.Name -TimeoutSeconds $BastionDeletionTimeout
+        if (-not $gone) {
+            throw "Bastion '$($Bastion.Name)' did not finish deleting within timeout; public IP left intact for safety."
+        }
+
+        # Now remove the associated public IP(s), if requested.
+        foreach ($pipId in $publicIpIds) {
+            try {
+                $pip = Get-AzResource -ResourceId $pipId -ErrorAction SilentlyContinue
+                if ($pip) {
+                    Invoke-WithRetry { Remove-AzPublicIpAddress -ResourceGroupName $pip.ResourceGroupName -Name $pip.Name -Force }
+                }
+            } catch {
+                # Public IP cleanup failure shouldn't flip the whole Bastion removal to "failed",
+                # since the Bastion itself is already gone. Log it via a skipped-style note instead.
+                Write-Warning "Bastion '$($Bastion.Name)' removed, but failed to remove public IP '$pipId': $_"
+            }
+        }
+
+        $global:cleanupResults.BastionsRemoved++
+        $global:cleanupResults.BastionsRemovedRGs += "$($Bastion.Name) (RG: $($Bastion.ResourceGroupName))"
+    }
+    catch {
+        $global:cleanupResults.FailedBastions += $Bastion.Name
+        $global:cleanupResults.FailedBastionsRGs += "$($Bastion.Name) (RG: $($Bastion.ResourceGroupName))"
+        $global:cleanupResults.BastionErrors++
+    }
+}
+
 $vmList = Get-AzVM | Where-Object { $_.Tags -and $_.Tags['CourseEndDay'] -ieq (Get-LondonTime (Get-Date)).DayOfWeek }
 $global:cleanupResults.VMsTargeted = $vmList.Count
+
+$bastionList = Get-AzBastion | Where-Object { $_.Tag -and $_.Tag['CourseEndDay'] -ieq (Get-LondonTime (Get-Date)).DayOfWeek }
+$global:cleanupResults.BastionsTargeted = $bastionList.Count
 
 if ($ParallelMode -and -not $WhatIf) {
     $vmList | ForEach-Object -Parallel {
@@ -207,16 +295,22 @@ if ($ParallelMode -and -not $WhatIf) {
     foreach ($vm in $vmList) { Remove-VMAndDependencies -VM $vm }
 }
 
+# Bastion cleanup always runs sequentially, regardless of ParallelMode,
+# since Remove-AzBastion is a heavy, long-running operation and a Bastion
+# can be shared across multiple VMs/subnets in the same VNet.
+foreach ($bastion in $bastionList) { Remove-BastionAndDependencies -Bastion $bastion }
+
 $global:cleanupResults.EndTime  = Get-Date
 $global:cleanupResults.EndTimeStr = Format-LondonTime $global:cleanupResults.EndTime
 $global:cleanupResults.Duration = [math]::Round((New-TimeSpan -Start $global:cleanupResults.StartTime -End $global:cleanupResults.EndTime).TotalMinutes, 2)
 
 Stop-Transcript
 
-#–– Teams Adaptive Card (VM-only, grouped by RG) ––
+#–– Teams Adaptive Card (VM + Bastion, grouped by RG) ––
 if ($teamsWebhookUrl) {
 
     $resourcesByRG = @{}
+    $bastionsByRG  = @{}
 
     function Add-VMToRG {
         param($rgName, $status, $vmName)
@@ -230,7 +324,19 @@ if ($teamsWebhookUrl) {
         $resourcesByRG[$rgName][$status] += $vmName
     }
 
-    # Populate RG grouping
+    function Add-BastionToRG {
+        param($rgName, $status, $bastionName)
+        if (-not $bastionsByRG.ContainsKey($rgName)) {
+            $bastionsByRG[$rgName] = @{
+                Removed = @()
+                Skipped = @()
+                Failed  = @()
+            }
+        }
+        $bastionsByRG[$rgName][$status] += $bastionName
+    }
+
+    # Populate VM RG grouping
     foreach ($entry in $global:cleanupResults.VMsRemovedRGs) {
         if ($entry -match '\(RG: (.+?)\)$') {
             $rg = $matches[1]
@@ -255,6 +361,31 @@ if ($teamsWebhookUrl) {
         }
     }
 
+    # Populate Bastion RG grouping
+    foreach ($entry in $global:cleanupResults.BastionsRemovedRGs) {
+        if ($entry -match '\(RG: (.+?)\)$') {
+            $rg = $matches[1]
+            $name = $entry -replace " \(RG: .+\)$", ""
+            Add-BastionToRG -rgName $rg -status 'Removed' -bastionName $name
+        }
+    }
+
+    foreach ($entry in $global:cleanupResults.SkippedBastionsRGs) {
+        if ($entry -match '\(RG: (.+?)\)$') {
+            $rg = $matches[1]
+            $name = $entry -replace " \(RG: .+\)$", ""
+            Add-BastionToRG -rgName $rg -status 'Skipped' -bastionName $name
+        }
+    }
+
+    foreach ($entry in $global:cleanupResults.FailedBastionsRGs) {
+        if ($entry -match '\(RG: (.+?)\)$') {
+            $rg = $matches[1]
+            $name = $entry -replace " \(RG: .+\)$", ""
+            Add-BastionToRG -rgName $rg -status 'Failed' -bastionName $name
+        }
+    }
+
     function Add-CollapsibleSection {
         param($title, $items, $color="Default")
         if ($items.Count -gt 0) {
@@ -273,19 +404,22 @@ if ($teamsWebhookUrl) {
 
     # Card body
     $cardBody = @(
-        @{ type="TextBlock"; text="Azure VM Daily Cleanup Report for ($subscriptionName)"; weight="Bolder"; size="Large" },
+        @{ type="TextBlock"; text="Azure VM & Bastion Daily Cleanup Report for ($subscriptionName)"; weight="Bolder"; size="Large" },
         @{ type="TextBlock"; text="Runbook Mode: $(if ($WhatIf) { 'Safe Mode / WhatIf' } else { 'Actual Cleanup' })"; wrap=$true },
         @{ type="FactSet"; facts=@(
             @{ title="Start:"; value=$global:cleanupResults.StartTimeStr },
             @{ title="End:"; value=$global:cleanupResults.EndTimeStr },
             @{ title="Duration:"; value="$($global:cleanupResults.Duration) min" },
             @{ title="VMs Targeted:"; value="$($global:cleanupResults.VMsTargeted)" },
-            @{ title="Removed:"; value="$($global:cleanupResults.VMsRemoved)" },
-            @{ title="Errors:"; value="$($global:cleanupResults.Errors)" }
+            @{ title="VMs Removed:"; value="$($global:cleanupResults.VMsRemoved)" },
+            @{ title="VM Errors:"; value="$($global:cleanupResults.Errors)" },
+            @{ title="Bastions Targeted:"; value="$($global:cleanupResults.BastionsTargeted)" },
+            @{ title="Bastions Removed:"; value="$($global:cleanupResults.BastionsRemoved)" },
+            @{ title="Bastion Errors:"; value="$($global:cleanupResults.BastionErrors)" }
         )}
     )
 
-    # Add collapsible sections per resource group
+    # Add collapsible sections per resource group — VMs
     foreach ($rg in $resourcesByRG.Keys | Sort-Object) {
         $rgData = $resourcesByRG[$rg]
 
@@ -295,12 +429,33 @@ if ($teamsWebhookUrl) {
 
         $rgColor = if ($failedCount -gt 0) { "Attention" } elseif ($skippedCount -gt 0) { "Warning" } else { "Good" }
 
-        $rgTitle = "Resource Group: $rg (✅$removedCount | ⚠️$skippedCount | ❌$failedCount)"
+        $rgTitle = "VMs — Resource Group: $rg (✅$removedCount | ⚠️$skippedCount | ❌$failedCount)"
 
         $rgItems = @()
         foreach ($vm in $rgData.Removed) { $rgItems += "✅ $vm" }
         foreach ($vm in $rgData.Skipped) { $rgItems += "⚠️ [WhatIf] $vm" }
         foreach ($vm in $rgData.Failed)  { $rgItems += "❌ $vm" }
+
+        $section = Add-CollapsibleSection -title $rgTitle -items $rgItems -color $rgColor
+        if ($section) { $cardBody += $section }
+    }
+
+    # Add collapsible sections per resource group — Bastions
+    foreach ($rg in $bastionsByRG.Keys | Sort-Object) {
+        $rgData = $bastionsByRG[$rg]
+
+        $removedCount = $rgData.Removed.Count
+        $skippedCount = $rgData.Skipped.Count
+        $failedCount  = $rgData.Failed.Count
+
+        $rgColor = if ($failedCount -gt 0) { "Attention" } elseif ($skippedCount -gt 0) { "Warning" } else { "Good" }
+
+        $rgTitle = "Bastions — Resource Group: $rg (✅$removedCount | ⚠️$skippedCount | ❌$failedCount)"
+
+        $rgItems = @()
+        foreach ($b in $rgData.Removed) { $rgItems += "✅ $b" }
+        foreach ($b in $rgData.Skipped) { $rgItems += "⚠️ [WhatIf] $b" }
+        foreach ($b in $rgData.Failed)  { $rgItems += "❌ $b" }
 
         $section = Add-CollapsibleSection -title $rgTitle -items $rgItems -color $rgColor
         if ($section) { $cardBody += $section }
