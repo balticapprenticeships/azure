@@ -1,5 +1,5 @@
 <#
-.version 3.2.0
+.version 3.2.1
 .AUTHOR Chris Langford
 .SYNOPSIS
     This script automates the creation of spoke virtual networks in each resource group of a subscription, assigns them CIDR blocks from a defined range, and peers them with a central firewall VNet. It also tags the VNets and applies a resource lock to prevent accidental deletion.
@@ -89,7 +89,7 @@ param(
     [string] $teamsWebhookUrl,
 
     [Parameter(Mandatory=$false)]
-    $DryRun = $true
+    $DryRun = $false
 )
 
 Import-Module Az.Storage -ErrorAction Stop
