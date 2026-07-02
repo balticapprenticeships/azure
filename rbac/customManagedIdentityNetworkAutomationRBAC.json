@@ -1,0 +1,47 @@
+{
+    "properties": {
+        "roleName": "Custom Nettwork Automation Contributor",
+        "IsCustom": true,
+        "description": "Lets system-assigned managed identities manage virtual networks, subnets, peerings and storage accounts.",
+        "assignableScopes": [
+            "/subscriptions/<SUBSCRIPTION-ID>"
+        ],
+        "permissions": [
+            {
+                "actions": [
+                    "Microsoft.Authorization/*/read",
+                    "Microsoft.Insights/alertRules/*",
+                    "Microsoft.Insights/diagnosticSettings/*",
+                    "Microsoft.Network/*",
+                    "Microsoft.Network/virtualNetworks/subnets/joinViaServiceEndpoint/action",
+                    "Microsoft.ResourceHealth/availabilityStatuses/read",
+                    "Microsoft.Resources/deployments/*",
+                    "Microsoft.Resources/subscriptions/resourceGroups/read",
+                    "Microsoft.Storage/storageAccounts/*",
+                    "Microsoft.Storage/storageAccounts/blobServices/containers/delete",
+                    "Microsoft.Storage/storageAccounts/blobServices/containers/read",
+                    "Microsoft.Storage/storageAccounts/blobServices/containers/write",
+                    "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/read",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/write",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/delete",
+                    "Microsoft.Support/*"
+                ],
+                "notActions": [],
+                "dataActions": [
+                    "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete",
+                    "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+                    "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+                    "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/move/action",
+                    "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/entities/read",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/entities/write",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/entities/delete",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/entities/add/action",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/entities/update/action"
+                ],
+                "notDataActions": []
+            }
+        ]
+    }
+}
