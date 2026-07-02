@@ -1,0 +1,58 @@
+{
+    "properties": {
+        "roleName": "Spoke VNet Create Peer Runbook Operator",
+        "IsCustom": true,
+        "description": "Allows Azure Automation runbook to create spoke VNets, NSGs, peerings, tags, locks, and access CIDR storage account keys.",
+        "assignableScopes": [
+            "/subscriptions/<subscription-id>",
+            "/subscriptions/<subscription-id>/resourceGroups/FirewallRg",
+            "/subscriptions/<subscription-id>/resourceGroups/NetworkAutomationRg"
+        ],
+        "permissions": [
+            {
+                "actions": [
+                    "Microsoft.Authorization/*/read",
+                    "Microsoft.Authorization/locks/write",
+                    "Microsoft.Authorization/locks/delete",
+                    "Microsoft.Insights/alertRules/*",
+                    "Microsoft.Insights/diagnosticSettings/*",
+                    "Microsoft.Network/networkSecurityGroups/read",
+                    "Microsoft.Network/networkSecurityGroups/write",
+                    "Microsoft.Network/networkSecurityGroups/delete",
+                    "Microsoft.Network/networkSecurityGroups/securityRules/read",
+                    "Microsoft.Network/networkSecurityGroups/securityRules/write",
+                    "Microsoft.Network/networkSecurityGroups/securityRules/delete",
+                    "Microsoft.Network/virtualNetworks/read",
+                    "Microsoft.Network/virtualNetworks/write",
+                    "Microsoft.Network/virtualNetworks/delete",
+                    "Microsoft.Network/virtualNetworks/subnets/read",
+                    "Microsoft.Network/virtualNetworks/subnets/write",
+                    "Microsoft.Network/virtualNetworks/subnets/joinViaServiceEndpoint/action",
+                    "Microsoft.Network/virtualNetworks/virtualNetworkPeerings/read",
+                    "Microsoft.Network/virtualNetworks/virtualNetworkPeerings/write",
+                    "Microsoft.Network/virtualNetworks/virtualNetworkPeerings/delete",
+                    "Microsoft.Resources/deployments/*",
+                    "Microsoft.Resources/subscriptions/resourceGroups/read",
+                    "Microsoft.Resources/subscriptions/resourceGroups/resources/read",
+                    "Microsoft.Resources/tags/read",
+                    "Microsoft.Resources/tags/write",
+                    "Microsoft.Storage/storageAccounts/read",
+                    "Microsoft.Storage/storageAccounts/listKeys/action",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/read",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/write",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/delete",
+                    "Microsoft.Support/*"
+                ],
+                "notActions": [],
+                "dataActions": [
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/entities/read",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/entities/write",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/entities/delete",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/entities/add/action",
+                    "Microsoft.Storage/storageAccounts/tableServices/tables/entities/update/action"
+                ],
+                "notDataActions": []
+            }
+        ]
+    }
+}
