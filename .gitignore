@@ -13,6 +13,7 @@
 [Dd]ev/
 [Aa]rchive/
 #[Oo]perations/
+deployment/vmdeploymentbicep/
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs
