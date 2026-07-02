@@ -1,7 +1,7 @@
 ################################################################
 # Script to configure Windows lab environment using DSC        #
 # Author: Chris Langford                                       #
-# Version: 7.0.3                                               #
+# Version: 7.0.4                                               #
 ################################################################
 
 Configuration BaWinDesktopLabCfg {
@@ -331,6 +331,15 @@ Configuration BaDataLevel4LabCfg {
         {
             Ensure = "Present"
             GroupName = "Remote Desktop Users"
+            MembersToInclude = @($localUser)
+            DependsOn = "[User]CreateUserAccount"
+        }
+
+        # This resource block adds a user to the docker-users groups
+        Group "AddToDockerUsersGroup"
+        {
+            Ensure = "Present"
+            GroupName = "docker-users"
             MembersToInclude = @($localUser)
             DependsOn = "[User]CreateUserAccount"
         }
