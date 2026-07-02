@@ -1,0 +1,74 @@
+{
+  "properties": {
+    "displayName": "Require a tag on resource groups",
+    "policyType": "Custom",
+    "mode": "All",
+    "description": "Requires the specified tag to exist on resource groups, with support for excluded resource group name patterns.",
+    "metadata": {
+      "version": "1.0.0",
+      "category": "Tags"
+    },
+    "parameters": {
+      "tagName": {
+        "type": "String",
+        "metadata": {
+          "displayName": "Tag name",
+          "description": "Name of the tag that must be present on resource groups."
+        }
+      },
+      "excludedResourceGroupNamePatterns": {
+        "type": "Array",
+        "metadata": {
+          "displayName": "Excluded resource group name patterns",
+          "description": "One or more resource group name patterns to exclude. Use Azure Policy 'like' syntax, for example 'rg-temp-*'. Each pattern should contain no more than one wildcard character."
+        },
+        "defaultValue": []
+      },
+      "effect": {
+        "type": "String",
+        "metadata": {
+          "displayName": "Effect",
+          "description": "Enable deny enforcement, audit only, or disable this policy assignment."
+        },
+        "allowedValues": [
+          "deny",
+          "audit",
+          "disabled"
+        ],
+        "defaultValue": "deny"
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.Resources/subscriptions/resourceGroups"
+          },
+          {
+            "field": "name",
+            "notLike": "IT_BalticAzureImageBuilderRg*"
+          },
+          {
+            "count": {
+              "value": "[parameters('excludedResourceGroupNamePatterns')]",
+              "name": "excludedPattern",
+              "where": {
+                "field": "name",
+                "like": "[current('excludedPattern')]"
+              }
+            },
+            "equals": 0
+          },
+          {
+            "field": "[concat('tags[', parameters('tagName'), ']')]",
+            "exists": "false"
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effect')]"
+      }
+    }
+  }
+}
