@@ -1,7 +1,7 @@
 ################################################################
 # Script to configure Windows lab environment using DSC        #
 # Author: Chris Langford                                       #
-# Version: 7.0.4                                               #
+# Version: 7.0.5                                               #
 ################################################################
 
 Configuration BaWinDesktopLabCfg {
@@ -506,6 +506,128 @@ Configuration BaDataLevel4SqlLabCfg {
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
                 Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
+            }
+            TestScript = { $false}
+            GetScript = {
+                # Do not return anything, just a placeholder
+            }
+        }
+    }
+}
+
+Configuration BaDataLevel5LabCfg {
+    [CmdletBinding()]
+
+    param (
+        [Parameter(Mandatory = $true)]
+        [System.Management.Automation.PSCredential]
+        [System.Management.Automation.Credential()]
+        $Credential
+    )
+
+    Import-DscResource -ModuleName ComputerManagementDsc, PSDesiredStateConfiguration
+
+    Node localhost {
+        LocalConfigurationmanager {
+            RebootNodeIfNeeded = $true
+        }
+
+        # Construct fully-qualified local username
+        $localUser = "$env:COMPUTERNAME\$($Credential.UserName)"
+
+        # This resource block creates a local User
+        User "CreateUserAccount"
+        {
+            Ensure = "Present"
+            UserName = $Credential.UserName
+            Password = $Credential
+            FullName = "Baltic Apprentice"
+            Description = "Baltic Apprentice User Account"
+            PasswordNeverExpires = $true
+            PasswordChangeRequired = $false
+            PasswordChangeNotAllowed = $true
+        }
+
+        # This resource block adds a user to specific groups
+        Group "AddToRemoteDesktopUserGroup"
+        {
+            Ensure = "Present"
+            GroupName = "Remote Desktop Users"
+            MembersToInclude = @($localUser)
+            DependsOn = "[User]CreateUserAccount"
+        }
+
+        # This resource block adds a user to the docker-users groups
+        Group "AddToDockerUsersGroup"
+        {
+            Ensure = "Present"
+            GroupName = "docker-users"
+            MembersToInclude = @($localUser)
+            DependsOn = "[User]CreateUserAccount"
+        }
+
+        # This resource block ensures that the file or command is executed        
+        Script "InstallPythonModules" {
+
+            GetScript = { @{ Result = "Checking Python modules" } }
+
+            TestScript = {
+                $pythonPath = "C:\Program Files\Python314\python.exe"
+                if (-not (Test-Path $pythonPath)) { return $false }
+
+                $modules = @("numpy","pandas","scikit-learn","statsmodels","matplotlib","seaborn","scipy")
+                foreach ($module in $modules) {
+                    if (-not (& $pythonPath -m pip show $module 2>$null)) {
+                        return $false
+                    }
+                }
+                return $true
+            }
+
+            SetScript = {
+                $pythonPath = "C:\Program Files\Python314\python.exe"
+
+                # Ensure pip is up-to-date
+                & $pythonPath -m ensurepip --upgrade
+                & $pythonPath -m pip install --upgrade pip
+
+                $modules = @("numpy","pandas","scikit-learn","statsmodels","matplotlib","seaborn","scipy")
+                foreach ($module in $modules) {
+                    Write-Verbose "Installing Python module: $module"
+                    & $pythonPath -m pip install $module --quiet --disable-pip-version-check
+                }
+            }
+        }
+
+        # This resource block ensures that the file are downloaded from GitHub and moved to the correct location
+        Script "DowloadLabFiles" {
+            
+            GetScript = { @{ Result = "Checking if lab files are downloaded" } }
+
+            TestScript = {
+                # Do nothing, just a placeholder to ensure the SetScript runs
+            }
+
+            SetScript = {
+                New-Item -ItemType Directory -Path "C:\buildArtifacts" -Force | Out-Null
+                new-Item -ItemType Directory -Path "C:\Users\Public\Documents\CourseResources\L5 Data Enginner\Exploring Suitable Data Storage Solutions" -Force | Out-Null
+                $labFilesUrl = "https://github.com/balticapprenticeships/courses/raw/refs/heads/main/DataRouteway/Level%205/Data%20Engineer/Course%205/sales-data-pipeline_airflow.zip"
+                
+                $labFilesPath = "C:\Users\Public\Documents\CourseResources\L5 Data Enginner\Exploring Suitable Data Storage Solutions\"
+                Invoke-WebRequest -Uri $labFilesUrl -OutFile "C:\buildArtifacts\sales-data-pipeline_airflow.zip"
+                Expand-Archive -Path "C:\buildArtifacts\sales-data-pipeline_airflow.zip" -DestinationPath $labFilesPath
+            }
+        }
+
+        # This resource block ensures that the file or command is executed
+        Script "RemoveArtifacts"
+        {
+            SetScript = {
+                Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
+                Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
+                Remove-Item -Path "C:\buildArtifacts\" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction Silently
             }
             TestScript = { $false}
             GetScript = {
