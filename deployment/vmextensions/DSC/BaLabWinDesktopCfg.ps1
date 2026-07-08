@@ -53,10 +53,12 @@ Configuration BaWinDesktopLabCfg {
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
                 Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
+                Remove-Item -Path "C:\buildArtifacts\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction SilentlyContinue
             }
             TestScript = { $false }
             GetScript = {
-                # Do not return anything, just a placeholder
+                @{ Result = "Removing build artifacts" } # Do not return anything, just a placeholder
             }
         }
     }
@@ -111,10 +113,12 @@ Configuration BaDataBootCampLabCfg {
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
                 Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
+                Remove-Item -Path "C:\buildArtifacts\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction SilentlyContinue
             }
             TestScript = { $false}
             GetScript = {
-                # Do not return anything, just a placeholder
+                @{ Result = "Removing build artifacts" } # Do not return anything, just a placeholder
             }
         }
     }
@@ -169,10 +173,12 @@ Configuration BaExamImageLabCfg {
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
                 Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
+                Remove-Item -Path "C:\buildArtifacts\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction SilentlyContinue
             }
             TestScript = { $false}
             GetScript = {
-                # Do not return anything, just a placeholder
+                @{ Result = "Removing build artifacts" } # Do not return anything, just a placeholder
             }
         }
     }
@@ -225,11 +231,13 @@ Configuration BaExamTestingLabCfg {
             SetScript = {
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
-                Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
+                Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction SilentlyContinue
             }
             TestScript = { $false}
             GetScript = {
-                # Do not return anything, just a placeholder
+                @{ Result = "Removing build artifacts" } # Do not return anything, just a placeholder
             }
         }
     }
@@ -283,11 +291,13 @@ Configuration BaDataLevel3LabCfg {
             SetScript = {
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
-                Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
+                Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction SilentlyContinue
             }
             TestScript = { $false}
             GetScript = {
-                # Do not return anything, just a placeholder
+                @{ Result = "Removing build artifacts" }
             }
         }
     }
@@ -384,12 +394,12 @@ Configuration BaDataLevel4LabCfg {
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
                 Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
-                Remove-Item -Path "C:\buildArtifacts\" -Recurse -Force -ErrorAction SilentlyContinue
-                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction Silently
+                Remove-Item -Path "C:\buildArtifacts\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction SilentlyContinue
             }
             TestScript = { $false}
             GetScript = {
-                # Do not return anything, just a placeholder
+                @{ Result = "Removing build artifacts" } # Do not return anything, just a placeholder
             }
         }
     }
@@ -493,7 +503,7 @@ Configuration BaDataLevel4SqlLabCfg {
             }
             TestScript = { $false}
             GetScript = {
-                # Do not return anything, just a placeholder
+                @{ Result = "Creating SSMS shortcut" } # Do not return anything, just a placeholder
             }
 
             dependsOn = "[SqlSetup]InstallSQLServer"
@@ -505,11 +515,13 @@ Configuration BaDataLevel4SqlLabCfg {
             SetScript = {
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
-                Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
+                Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction SilentlyContinue 
             }
             TestScript = { $false}
             GetScript = {
-                # Do not return anything, just a placeholder
+                @{ Result = "Removing build artifacts" } # Do not return anything, just a placeholder
             }
         }
     }
@@ -605,7 +617,7 @@ Configuration BaDataLevel5LabCfg {
             GetScript = { @{ Result = "Checking if lab files are downloaded" } }
 
             TestScript = {
-                # Do nothing, just a placeholder to ensure the SetScript runs
+                 return $false # Do nothing, just a placeholder to ensure the SetScript runs
             }
 
             SetScript = {
@@ -626,12 +638,12 @@ Configuration BaDataLevel5LabCfg {
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
                 Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
-                Remove-Item -Path "C:\buildArtifacts\" -Recurse -Force -ErrorAction SilentlyContinue
-                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction Silently
+                Remove-Item -Path "C:\buildArtifacts\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction SilentlyContinue
             }
             TestScript = { $false}
             GetScript = {
-                # Do not return anything, just a placeholder
+                @{ Result = "Removing build artifacts" } # Do not return anything, just a placeholder
             }
         }
     }
@@ -684,11 +696,13 @@ Configuration BaSWAPC5LabCfg {
             SetScript = {
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
-                Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
+                Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction SilentlyContinue
             }
             TestScript = { $false}
             GetScript = {
-                # Do not return anything, just a placeholder
+                @{ Result = "Removing build artifacts" } # Do not return anything, just a placeholder
             }
         }
     }
@@ -742,11 +756,13 @@ Configuration BaSWAPC5UE5LabCfg {
             SetScript = {
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
-                Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
+                Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts\*" -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction SilentlyContinue
             }
             TestScript = { $false}
             GetScript = {
-                # Do not return anything, just a placeholder
+                @{ Result = "Removing build artifacts" } # Do not return anything, just a placeholder
             }
         }
     }
