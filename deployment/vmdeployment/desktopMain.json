@@ -84,6 +84,7 @@
                 "l3DmCc",
                 "l3Data",
                 "l4Data",
+                "l5Data",
                 "l4SoftDev",
                 "exams",
                 "bootcamp"
@@ -119,6 +120,17 @@
                 "NoValue",
                 "DataLevel4Sql",
                 "DataLevel4"
+            ],
+            "metadata": {
+                "description": "Choose the course to deliver"
+            }
+        },
+        "l5DataCourse": {
+            "type": "string",
+            "defaultValue": "NoValue",
+            "allowedValues": [
+                "NoValue",
+                "DataLevel5"
             ],
             "metadata": {
                 "description": "Choose the course to deliver"
@@ -376,6 +388,9 @@
             "l4Data": {
                 "courseImageDefinitionName": "[parameters('l4DataCourse')]"
             },
+            "l5Data": {
+                "courseImageDefinitionName": "[parameters('l5DataCourse')]"
+            },
             "l4SoftDev": {
                 "courseImageDefinitionName": "[parameters('l4SoftDevCourse')]"
             },
@@ -555,7 +570,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/windowsDesktop.json')]",
-                    "contentVersion": "4.0.4.1"
+                    "contentVersion": "4.0.5.0"
                 },
                 "parameters": {
                     "location": {
