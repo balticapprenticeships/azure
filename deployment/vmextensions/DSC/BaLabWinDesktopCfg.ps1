@@ -1,7 +1,7 @@
 ################################################################
 # Script to configure Windows lab environment using DSC        #
 # Author: Chris Langford                                       #
-# Version: 7.0.5                                               #
+# Version: 7.0.6                                               #
 ################################################################
 
 Configuration BaWinDesktopLabCfg {
@@ -618,15 +618,24 @@ Configuration BaDataLevel5LabCfg {
 
             TestScript = {
                 $labFilesPath = "C:\Users\Public\Documents\CourseResources\L5 Data Enginner\Exploring Suitable Data Storage Solutions"
+                $projectPath = Join-Path -Path $labFilesPath -ChildPath "sales-data-pipeline_airflow"
+                $airflowPath = Join-Path -Path $projectPath -ChildPath "airflow-docker"
                 $markerPath = Join-Path -Path $labFilesPath -ChildPath ".sales-data-pipeline_airflow.extracted"
 
-                return (Test-Path -Path $markerPath -PathType Leaf)
+                return (
+                    (Test-Path -Path $markerPath -PathType Leaf) -and
+                    (Test-Path -Path $airflowPath -PathType Container) -and
+                    (Test-Path -Path (Join-Path -Path $airflowPath -ChildPath "config") -PathType Container) -and
+                    (Test-Path -Path (Join-Path -Path $airflowPath -ChildPath "dags") -PathType Container)
+                )
             }
 
             SetScript = {
                 $tempPath = "C:\buildArtifacts"
                 $zipPath = Join-Path -Path $tempPath -ChildPath "sales-data-pipeline_airflow.zip"
+                $extractPath = Join-Path -Path $tempPath -ChildPath "sales-data-pipeline_airflow_extract"
                 $labFilesPath = "C:\Users\Public\Documents\CourseResources\L5 Data Enginner\Exploring Suitable Data Storage Solutions"
+                $projectPath = Join-Path -Path $labFilesPath -ChildPath "sales-data-pipeline_airflow"
                 $markerPath = Join-Path -Path $labFilesPath -ChildPath ".sales-data-pipeline_airflow.extracted"
                 $labFilesUrl = "https://github.com/balticapprenticeships/courses/raw/refs/heads/main/DataRouteway/Level%205/Data%20Engineer/Course%205/sales-data-pipeline_airflow.zip"
                 
@@ -637,8 +646,47 @@ Configuration BaDataLevel5LabCfg {
                     Remove-Item -Path $zipPath -Force
                 }
 
-                Invoke-WebRequest -Uri $labFilesUrl -OutFile $zipPath 
-                Expand-Archive -Path $zipPath -DestinationPath $labFilesPath -Force
+                if (Test-Path -Path $extractPath) {
+                    Remove-Item -Path $extractPath -Recurse -Force
+                }
+
+                if (Test-Path -Path $markerPath -PathType Leaf) {
+                    Remove-Item -Path $markerPath -Force
+                }
+
+                Invoke-WebRequest -Uri $labFilesUrl -OutFile $zipPath -UseBasicParsing
+                Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+
+                $airflowFolder = Get-ChildItem -Path $extractPath -Directory -Recurse -Filter "airflow-docker" |
+                    Select-Object -First 1
+
+                if ($null -eq $airflowFolder) {
+                    throw "The downloaded archive does not contain the expected airflow-docker folder."
+                }
+
+                $sourceProjectPath = Split-Path -Path $airflowFolder.FullName -Parent
+
+                if (Test-Path -Path $projectPath) {
+                    Remove-Item -Path $projectPath -Recurse -Force
+                }
+
+                New-Item -ItemType Directory -Path $projectPath -Force | Out-Null
+                Get-ChildItem -LiteralPath $sourceProjectPath -Force |
+                    Copy-Item -Destination $projectPath -Recurse -Force
+
+                $airflowPath = Join-Path -Path $projectPath -ChildPath "airflow-docker"
+                $requiredFolders = @(
+                    $airflowPath,
+                    (Join-Path -Path $airflowPath -ChildPath "config"),
+                    (Join-Path -Path $airflowPath -ChildPath "dags")
+                )
+
+                foreach ($requiredFolder in $requiredFolders) {
+                    if (-not (Test-Path -Path $requiredFolder -PathType Container)) {
+                        throw "The required lab folder was not created: $requiredFolder"
+                    }
+                }
+
                 New-Item -ItemType File -Path $markerPath -Force | Out-Null
             }
         }
