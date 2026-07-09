@@ -611,23 +611,35 @@ Configuration BaDataLevel5LabCfg {
             }
         }
 
-        # This resource block ensures that the file are downloaded from GitHub and moved to the correct location
-        Script "DowloadLabFiles" {
+        # This resource block ensures that the lab files are downloaded from GitHub and extracted to the correct location.
+        Script "DownloadLabFiles" {
             
             GetScript = { @{ Result = "Checking if lab files are downloaded" } }
 
             TestScript = {
-                 return $false # Do nothing, just a placeholder to ensure the SetScript runs
+                $labFilesPath = "C:\Users\Public\Documents\CourseResources\L5 Data Enginner\Exploring Suitable Data Storage Solutions"
+                $markerPath = Join-Path -Path $labFilesPath -ChildPath ".sales-data-pipeline_airflow.extracted"
+
+                return (Test-Path -Path $markerPath -PathType Leaf)
             }
 
             SetScript = {
-                New-Item -ItemType Directory -Path "C:\buildArtifacts" -Force | Out-Null
-                new-Item -ItemType Directory -Path "C:\Users\Public\Documents\CourseResources\L5 Data Enginner\Exploring Suitable Data Storage Solutions" -Force | Out-Null
+                $tempPath = "C:\buildArtifacts"
+                $zipPath = Join-Path -Path $tempPath -ChildPath "sales-data-pipeline_airflow.zip"
+                $labFilesPath = "C:\Users\Public\Documents\CourseResources\L5 Data Enginner\Exploring Suitable Data Storage Solutions"
+                $markerPath = Join-Path -Path $labFilesPath -ChildPath ".sales-data-pipeline_airflow.extracted"
                 $labFilesUrl = "https://github.com/balticapprenticeships/courses/raw/refs/heads/main/DataRouteway/Level%205/Data%20Engineer/Course%205/sales-data-pipeline_airflow.zip"
                 
-                $labFilesPath = "C:\Users\Public\Documents\CourseResources\L5 Data Enginner\Exploring Suitable Data Storage Solutions\"
-                Invoke-WebRequest -Uri $labFilesUrl -OutFile "C:\buildArtifacts\sales-data-pipeline_airflow.zip"
-                Expand-Archive -Path "C:\buildArtifacts\sales-data-pipeline_airflow.zip" -DestinationPath $labFilesPath
+                New-Item -ItemType Directory -Path $tempPath -Force | Out-Null
+                New-Item -ItemType Directory -Path $labFilesPath -Force | Out-Null
+
+                if (Test-Path -Path $zipPath -PathType Leaf) {
+                    Remove-Item -Path $zipPath -Force
+                }
+
+                Invoke-WebRequest -Uri $labFilesUrl -OutFile $zipPath 
+                Expand-Archive -Path $zipPath -DestinationPath $labFilesPath -Force
+                New-Item -ItemType File -Path $markerPath -Force | Out-Null
             }
         }
 
