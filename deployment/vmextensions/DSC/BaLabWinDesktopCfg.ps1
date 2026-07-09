@@ -634,12 +634,31 @@ Configuration BaDataLevel5LabCfg {
                 $tempPath = "C:\buildArtifacts"
                 $zipPath = Join-Path -Path $tempPath -ChildPath "sales-data-pipeline_airflow.zip"
                 $extractPath = Join-Path -Path $tempPath -ChildPath "sales-data-pipeline_airflow_extract"
+                $emptyPath = Join-Path -Path $tempPath -ChildPath "empty"
                 $labFilesPath = "C:\Users\Public\Documents\CourseResources\L5 Data Enginner\Exploring Suitable Data Storage Solutions"
                 $projectPath = Join-Path -Path $labFilesPath -ChildPath "sales-data-pipeline_airflow"
                 $markerPath = Join-Path -Path $labFilesPath -ChildPath ".sales-data-pipeline_airflow.extracted"
                 $labFilesUrl = "https://github.com/balticapprenticeships/courses/raw/refs/heads/main/DataRouteway/Level%205/Data%20Engineer/Course%205/sales-data-pipeline_airflow.zip"
+
+                function Invoke-RobocopyMirror {
+                    param (
+                        [Parameter(Mandatory = $true)]
+                        [string]
+                        $Source,
+
+                        [Parameter(Mandatory = $true)]
+                        [string]
+                        $Destination
+                    )
+
+                    & robocopy $Source $Destination /MIR /COPY:DAT /DCOPY:DAT /R:3 /W:5 /NP /NFL /NDL /NJH /NJS
+                    if ($LASTEXITCODE -gt 7) {
+                        throw "Robocopy failed while copying from '$Source' to '$Destination'. Exit code: $LASTEXITCODE"
+                    }
+                }
                 
                 New-Item -ItemType Directory -Path $tempPath -Force | Out-Null
+                New-Item -ItemType Directory -Path $emptyPath -Force | Out-Null
                 New-Item -ItemType Directory -Path $labFilesPath -Force | Out-Null
 
                 if (Test-Path -Path $zipPath -PathType Leaf) {
@@ -647,7 +666,8 @@ Configuration BaDataLevel5LabCfg {
                 }
 
                 if (Test-Path -Path $extractPath) {
-                    Remove-Item -Path $extractPath -Recurse -Force
+                    Invoke-RobocopyMirror -Source $emptyPath -Destination $extractPath
+                    Remove-Item -Path $extractPath -Force -ErrorAction SilentlyContinue
                 }
 
                 if (Test-Path -Path $markerPath -PathType Leaf) {
@@ -666,13 +686,8 @@ Configuration BaDataLevel5LabCfg {
 
                 $sourceProjectPath = Split-Path -Path $airflowFolder.FullName -Parent
 
-                if (Test-Path -Path $projectPath) {
-                    Remove-Item -Path $projectPath -Recurse -Force
-                }
-
                 New-Item -ItemType Directory -Path $projectPath -Force | Out-Null
-                Get-ChildItem -LiteralPath $sourceProjectPath -Force |
-                    Copy-Item -Destination $projectPath -Recurse -Force
+                Invoke-RobocopyMirror -Source $sourceProjectPath -Destination $projectPath
 
                 $airflowPath = Join-Path -Path $projectPath -ChildPath "airflow-docker"
                 $requiredFolders = @(
@@ -695,16 +710,29 @@ Configuration BaDataLevel5LabCfg {
         Script "RemoveArtifacts"
         {
             SetScript = {
+                $emptyPath = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "BaDataLevel5Empty"
+                New-Item -ItemType Directory -Path $emptyPath -Force | Out-Null
+
                 Remove-Item -Path "C:\workflow-artifacts\" -Recurse -Force -ErrorAction SilentlyContinue
                 Remove-Item -Path "C:\workflow-artifacts" -Force -ErrorAction SilentlyContinue   
                 Remove-Item -Path "C:\workflow-artifacts.zip" -Force -ErrorAction SilentlyContinue 
-                Remove-Item -Path "C:\buildArtifacts\*" -Recurse -Force -ErrorAction SilentlyContinue
+
+                if (Test-Path -Path "C:\buildArtifacts") {
+                    & robocopy $emptyPath "C:\buildArtifacts" /MIR /R:3 /W:5 /NP /NFL /NDL /NJH /NJS
+                    if ($LASTEXITCODE -gt 7) {
+                        throw "Robocopy failed while cleaning C:\buildArtifacts. Exit code: $LASTEXITCODE"
+                    }
+                }
+
                 Remove-Item -Path "C:\buildArtifacts" -Force -ErrorAction SilentlyContinue
             }
-            TestScript = { $false}
+            TestScript = {
+                return (-not ((Test-Path -Path "C:\workflow-artifacts") -or (Test-Path -Path "C:\workflow-artifacts.zip") -or (Test-Path -Path "C:\buildArtifacts")))
+            }
             GetScript = {
                 @{ Result = "Removing build artifacts" } # Do not return anything, just a placeholder
             }
+            DependsOn = "[Script]DownloadLabFiles"
         }
     }
 }
