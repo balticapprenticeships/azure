@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.5.0",
+    "contentVersion": "4.0.5.1",
     "parameters": {
         "location": {
             "type": "string"
@@ -75,6 +75,9 @@
             "type": "string"
         },
         "deliveringCoachInitials": {
+            "type": "string"
+        },
+        "deliveringCoachEmail": {
             "type": "string"
         },
         "courseStartDate": {

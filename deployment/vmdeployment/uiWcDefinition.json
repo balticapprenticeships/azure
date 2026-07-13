@@ -2,7 +2,7 @@
     "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
     "handler": "Microsoft.Azure.CreateUIDef",
     "version": "0.1.2-preview",
-    "currentVersion": "4.4.0.1",
+    "currentVersion": "4.4.1.0",
     "parameters": {
         "config": {
             "isWizard": true
@@ -619,7 +619,19 @@
                                     "required": true,
                                     "validationMessage": "This must contain a maximum of 2 uppercase letters, the firstname initial and the surname initial."
                                 },
-                                "toolTip": "Here you can enter your first name and surname"
+                                "toolTip": "Here you can enter the initials for yourfirst name and surname"
+                            },
+                            {
+                                "name": "coachEmail",
+                                "label": "Delivering Coach Email",
+                                "type": "Microsoft.Common.TextBox",
+                                "placeholder": "Delivering Coach Email e.g., joe.bloggs@company.com",
+                                "constraints": {
+                                    "required": false,
+                                    "regex": "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$",
+                                    "validationMessage": "Email is not valid. Please re-enter."
+                                },
+                                "toolTip": "Here you can enter the email address for the delivering coach"
                             },
                             {
                                 "name": "routeway",
@@ -809,6 +821,7 @@
             "subnetName": "[steps('netConfig').nicConfig.subnetName]",
             "createdBy": "[steps('tags').mngTagsConfig.createdBy]",
             "deliveringCoachInitials": "[steps('tags').mngTagsConfig.coachInitials]",
+            "deliveringCoachEmail": "[steps('tags').mngTagsConfig.coachEmail]",
             "routeway": "[steps('tags').mngTagsConfig.routeway]",
             "courseStartDate": "[steps('tags').mngTagsConfig.courseDate]",
             "courseEndDay": "[steps('tags').mngTagsConfig.courseEndDay]",
