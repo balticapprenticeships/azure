@@ -255,6 +255,12 @@
                 "description": "Please provide the first and last inital of the delivering coach."
             }
         },
+        "deliveringCoachEmail": {
+            "type": "string",
+            "metadata": {
+                "description": "Please provide the email address of the delivering coach."
+            }
+        },
         "routeway": {
             "type": "string",
             "metadata": {
@@ -521,7 +527,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/windowsServer.json')]",
-                    "contentVersion": "4.0.1.0"
+                    "contentVersion": "4.0.1.1"
                 },
                 "parameters": {
                     "location": {
@@ -620,6 +626,9 @@
                     },
                     "deliveringCoachInitials": {
                         "value": "[parameters('deliveringCoachInitials')]"
+                    },
+                    "deliveringCoachEmail": {
+                        "value": "[parameters('deliveringCoachEmail')]"
                     },
                     "courseStartDate": {
                         "value": "[parameters('courseStartDate')]"

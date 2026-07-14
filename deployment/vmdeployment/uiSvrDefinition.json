@@ -470,6 +470,18 @@
                                 "toolTip": "Here you can enter your first name and surname"
                             },
                             {
+                                "name": "coachEmail",
+                                "label": "Delivering Coach Email",
+                                "type": "Microsoft.Common.TextBox",
+                                "placeholder": "Delivering Coach Email e.g., joe.bloggs@balticapprenticeships.com",
+                                "constraints": {
+                                    "regex": "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$",
+                                    "required": true,
+                                    "validationMessage": "Please enter a valid email address."
+                                },
+                                "toolTip": "Here you can enter your first name and surname"
+                            },
+                            {
                                 "name": "routeway",
                                 "label": "Routeway",
                                 "type": "Microsoft.Common.DropDown",                                
@@ -653,6 +665,7 @@
             "subnetName": "[steps('netConfig').nicConfig.subnetName]",
             "createdBy": "[steps('tags').mngTagsConfig.createdBy]",
             "deliveringCoachInitials": "[steps('tags').mngTagsConfig.coachInitials]",
+            "deliveringCoachEmail": "[steps('tags').mngTagsConfig.coachEmail]",
             "routeway": "[steps('tags').mngTagsConfig.routeway]",
             "courseStartDate": "[steps('tags').mngTagsConfig.courseDate]",
             "courseEndDay": "[steps('tags').mngTagsConfig.courseEndDay]",
