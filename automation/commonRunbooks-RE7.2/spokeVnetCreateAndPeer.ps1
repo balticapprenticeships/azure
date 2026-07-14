@@ -1,5 +1,5 @@
 <#
-.version 3.2.1
+.version 3.2.2
 .AUTHOR Chris Langford
 .SYNOPSIS
     This script automates the creation of spoke virtual networks in each resource group of a subscription, assigns them CIDR blocks from a defined range, and peers them with a central firewall VNet. It also tags the VNets and applies a resource lock to prevent accidental deletion.
@@ -79,7 +79,7 @@ param(
     [string]$CidrStoreSubscriptionId,
     [string]$CidrStoreTableName = "CidrAllocation",
 
-    [string[]]$ExcludeRgPattern = @("OMSrg$", "NetworkWatcherRG", "DefaultResourceGroup-"),
+    [string[]]$ExcludeRgPattern = @("OMSrg$", "NetworkWatcherRG", "DefaultResourceGroup-", "IT_*", "IT_BalticAzImageBuilderRg_"),
 
     [string]$IncludeRgTagName = "SpokeVNetAutomation",
     [string]$IncludeRgTagValue = "Enabled",
