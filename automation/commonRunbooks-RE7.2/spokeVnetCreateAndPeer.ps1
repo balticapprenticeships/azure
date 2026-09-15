@@ -36,7 +36,10 @@
 .PARAMETER CidrStoreTableName
     The name of the table in the storage account to use for CIDR persistence. Default is "CidrAllocation".
 .PARAMETER ExcludeRgPattern
-    An array of patterns to exclude resource groups from processing. Default is @("OMSrg$", "NetworkWatcherRG", "DefaultResourceGroup-").
+    An array of regular expressions (evaluated with -match, so case-insensitive and unanchored unless
+    you anchor them) used to exclude resource groups from processing. Prefix patterns must be anchored
+    with '^' - '*' is a regex quantifier here, not a wildcard. Default is
+    @('OMSrg$', '^NetworkWatcherRG', '^DefaultResourceGroup-', '^IT_', '^AzureBackupRG_', '^MC_').
 .PARAMETER IncludeRgTagName
     The resource group tag name required for processing. Default is "SpokeVNetAutomation".
 .PARAMETER IncludeRgTagValue
@@ -79,7 +82,18 @@ param(
     [string]$CidrStoreSubscriptionId,
     [string]$CidrStoreTableName = "CidrAllocation",
 
-    [string[]]$ExcludeRgPattern = @("OMSrg$", "NetworkWatcherRG", "DefaultResourceGroup-", "IT_*", "IT_BalticAzImageBuilderRg_"),
+    # These are regular expressions, not wildcards - they are evaluated with -match. Anchor prefix
+    # patterns with '^' so they cannot match mid-name: an unanchored 'IT_*' reads as "IT followed by
+    # zero or more underscores", which matches the substring "it" anywhere and therefore silently
+    # skipped Monitoring, SecurityRg, BalticLimitedRg and anything else containing those two letters.
+    [string[]]$ExcludeRgPattern = @(
+        'OMSrg$',                   # <customer>OMSrg - deliberately unanchored at the start
+        '^NetworkWatcherRG',        # Azure-managed Network Watcher group
+        '^DefaultResourceGroup-',   # Azure Monitor / Log Analytics default groups
+        '^IT_',                     # Azure Image Builder staging groups (IT_<rg>_<guid>)
+        '^AzureBackupRG_',          # Azure Backup infrastructure groups
+        '^MC_'                      # AKS node resource groups (MC_<rg>_<cluster>_<region>)
+    ),
 
     [string]$IncludeRgTagName = "SpokeVNetAutomation",
     [string]$IncludeRgTagValue = "Enabled",
@@ -1143,13 +1157,13 @@ $rgs = Invoke-InSpokeSubscription {
         }
 
         @($targetRg) | Where-Object {
-            $exclude = $false
+            $matchedExcludePattern = $null
             foreach ($pattern in $ExcludeRgPattern) {
-                if ($_.ResourceGroupName -match $pattern) { $exclude = $true; break }
+                if ($_.ResourceGroupName -match $pattern) { $matchedExcludePattern = $pattern; break }
             }
 
-            if ($exclude) {
-                Write-Output "Triggering resource group '$($_.ResourceGroupName)' matches an exclude pattern. Skipping."
+            if ($matchedExcludePattern) {
+                Write-Output "Triggering resource group '$($_.ResourceGroupName)' matches exclude pattern '$matchedExcludePattern'. Skipping."
                 return $false
             }
 
@@ -1170,21 +1184,26 @@ $rgs = Invoke-InSpokeSubscription {
     }
     else {
         Get-AzResourceGroup | Where-Object {
-            $exclude = $false
+            $matchedExcludePattern = $null
             foreach ($pattern in $ExcludeRgPattern) {
-                if ($_.ResourceGroupName -match $pattern) { $exclude = $true; break }
+                if ($_.ResourceGroupName -match $pattern) { $matchedExcludePattern = $pattern; break }
             }
 
-            if ($exclude) {
+            if ($matchedExcludePattern) {
+                # Logged, not silent: a badly written pattern that over-matches is otherwise
+                # invisible here, and looks identical to a resource group simply not being tagged.
+                Write-Output "Resource group '$($_.ResourceGroupName)' matches exclude pattern '$matchedExcludePattern'. Skipping."
                 return $false
             }
 
             if ($IncludeRgTagName) {
                 if (-not $_.Tags -or -not $_.Tags.ContainsKey($IncludeRgTagName)) {
+                    Write-Verbose "Resource group '$($_.ResourceGroupName)' does not have the required tag '$IncludeRgTagName'. Skipping."
                     return $false
                 }
 
                 if ($IncludeRgTagValue -and $_.Tags[$IncludeRgTagName] -ne $IncludeRgTagValue) {
+                    Write-Verbose "Resource group '$($_.ResourceGroupName)' tag '$IncludeRgTagName' does not equal '$IncludeRgTagValue'. Skipping."
                     return $false
                 }
             }
