@@ -1,5 +1,5 @@
 <#
-.version 1.0.0
+.version 1.1.0
 .AUTHOR Chris Langford
 .SYNOPSIS
     Reconciles the CIDR store table against Azure by removing allocation entries whose resource groups no longer exist.
@@ -323,6 +323,164 @@ function Get-CidrAllocationEntryDetail {
 # ----------------------------
 # Teams card
 # ----------------------------
+function New-CollapsibleSection {
+    <#
+        Builds a collapsible Adaptive Card section: a clickable header row plus a body container that
+        starts hidden. Clicking the header fires Action.ToggleVisibility against three element ids at
+        once - the body and the two "Show"/"Hide" labels - so the label always reflects the state.
+
+        Returns the two elements as an array. Call it wrapped in @(...) so an empty section (no items)
+        appends nothing rather than a stray $null.
+    #>
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Id,
+        [Parameter(Mandatory=$true)]
+        [string]$Title,
+        [Parameter(Mandatory=$false)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [object[]]$Items,
+        [bool]$Expanded = $false
+    )
+
+    if (-not $Items -or $Items.Count -eq 0) {
+        return @()
+    }
+
+    $bodyId = "$Id-body"
+    $showId = "$Id-show"
+    $hideId = "$Id-hide"
+
+    $toggle = @{
+        type = "Action.ToggleVisibility"
+        targetElements = @($bodyId, $showId, $hideId)
+    }
+
+    $header = @{
+        type = "Container"
+        separator = $true
+        selectAction = $toggle
+        items = @(
+            @{
+                type = "ColumnSet"
+                columns = @(
+                    @{
+                        type = "Column"
+                        width = "stretch"
+                        items = @(
+                            @{
+                                type = "TextBlock"
+                                text = $Title
+                                weight = "Bolder"
+                                wrap = $true
+                            }
+                        )
+                    },
+                    @{
+                        type = "Column"
+                        width = "auto"
+                        items = @(
+                            @{
+                                type = "TextBlock"
+                                id = $showId
+                                text = "Show"
+                                color = "Accent"
+                                isVisible = (-not $Expanded)
+                            },
+                            @{
+                                type = "TextBlock"
+                                id = $hideId
+                                text = "Hide"
+                                color = "Accent"
+                                isVisible = $Expanded
+                            }
+                        )
+                    }
+                )
+            }
+        )
+    }
+
+    $body = @{
+        type = "Container"
+        id = $bodyId
+        isVisible = $Expanded
+        items = $Items
+    }
+
+    return @($header, $body)
+}
+
+function Limit-CardText {
+    # A single very long detail string - a stack-flavoured storage exception, say - can breach the
+    # card size limit on its own, which no row cap would rescue. Truncate at the source.
+    param(
+        [AllowNull()]
+        [string]$Text,
+        [int]$MaxLength = 300
+    )
+
+    if ([string]::IsNullOrEmpty($Text)) { return "" }
+    if ($Text.Length -le $MaxLength) { return $Text }
+
+    return $Text.Substring(0, $MaxLength - 3) + "..."
+}
+
+function ConvertTo-CidrRowCardItem {
+    param(
+        [Parameter(Mandatory=$false)]
+        [AllowNull()]
+        [AllowEmptyCollection()]
+        [object[]]$Rows,
+        [int]$Limit = 25
+    )
+
+    if (-not $Rows -or $Rows.Count -eq 0) {
+        return @()
+    }
+
+    # Teams rejects cards over ~28 KB, so cap each section rather than letting a large sweep
+    # silently produce a card that never renders.
+    $items = @(
+        $Rows | Select-Object -First $Limit | ForEach-Object {
+            @{
+                type = "Container"
+                separator = $true
+                items = @(
+                    @{
+                        type = "TextBlock"
+                        weight = "Bolder"
+                        text = "$($_.ResourceGroup) / $($_.VNetName)"
+                        wrap = $true
+                    },
+                    @{
+                        type = "FactSet"
+                        facts = @(
+                            @{ title = "Subscription"; value = "$($_.SubscriptionName)" },
+                            @{ title = "VNet CIDR"; value = "$($_.VnetCidr)" },
+                            @{ title = "Partition"; value = "$($_.PartitionKey)" },
+                            @{ title = "Action"; value = "$($_.Action)" },
+                            @{ title = "Detail"; value = (Limit-CardText -Text "$($_.Detail)") }
+                        )
+                    }
+                )
+            }
+        }
+    )
+
+    if ($Rows.Count -gt $Limit) {
+        $items += @{
+            type = "TextBlock"
+            isSubtle = $true
+            wrap = $true
+            text = "Showing first $Limit of $($Rows.Count). See the runbook output for the full set."
+        }
+    }
+
+    return $items
+}
+
 function Send-TeamsRunbookCard {
     param(
         [Parameter(Mandatory=$true)]
@@ -349,103 +507,122 @@ function Send-TeamsRunbookCard {
     $skipped = @($Results | Where-Object { $_.Action -in @("SkippedInaccessible", "SkippedUnparsable") }).Count
     $failed = @($Results | Where-Object { $_.Action -eq "Failed" }).Count
 
-    # Only rows that actually needed a decision are worth listing - a healthy sweep is all "Retained".
-    $notable = @($Results | Where-Object { $_.Action -ne "Retained" })
+    # A healthy sweep is all "Retained", so the detail is grouped by outcome and collapsed by
+    # default - except failures, which are expanded so they cannot be missed.
+    $orphanRows = @($Results | Where-Object { $_.Action -in @("Removed", "WouldRemove") })
+    $skippedRows = @($Results | Where-Object { $_.Action -in @("SkippedInaccessible", "SkippedUnparsable") })
+    $failedRows = @($Results | Where-Object { $_.Action -eq "Failed" })
 
-    $resultContainers = @(
-        $notable | Select-Object -First 15 | ForEach-Object {
-            @{
-                type = "Container"
-                separator = $true
-                items = @(
-                    @{
-                        type = "TextBlock"
-                        weight = "Bolder"
-                        text = "$($_.ResourceGroup) / $($_.VNetName)"
-                        wrap = $true
-                    },
-                    @{
-                        type = "FactSet"
-                        facts = @(
-                            @{ title = "Subscription"; value = "$($_.SubscriptionName)" },
-                            @{ title = "VNet CIDR"; value = "$($_.VnetCidr)" },
-                            @{ title = "Partition"; value = "$($_.PartitionKey)" },
-                            @{ title = "Action"; value = "$($_.Action)" },
-                            @{ title = "Detail"; value = "$($_.Detail)" }
-                        )
-                    }
-                )
+    $orphanTitle = if ($DryRun) { "Orphaned rows to remove" } else { "Rows removed" }
+
+    $buildPayload = {
+        param([int]$Limit)
+
+        $resultContainers = @()
+
+        $resultContainers += @(
+            New-CollapsibleSection `
+                -Id "failed" `
+                -Title "Failures ($($failedRows.Count))" `
+                -Items @(ConvertTo-CidrRowCardItem -Rows $failedRows -Limit $Limit) `
+                -Expanded $true
+        )
+
+        $resultContainers += @(
+            New-CollapsibleSection `
+                -Id "orphans" `
+                -Title "$orphanTitle ($($orphanRows.Count))" `
+                -Items @(ConvertTo-CidrRowCardItem -Rows $orphanRows -Limit $Limit)
+        )
+
+        $resultContainers += @(
+            New-CollapsibleSection `
+                -Id "skipped" `
+                -Title "Skipped ($($skippedRows.Count))" `
+                -Items @(ConvertTo-CidrRowCardItem -Rows $skippedRows -Limit $Limit)
+        )
+
+        $subscriptionItems = @()
+        if ($SubscriptionSummary.Count -gt 0) {
+            $subscriptionFacts = @(
+                $SubscriptionSummary | Select-Object -First $Limit | ForEach-Object {
+                    @{ title = "$($_.SubscriptionName)"; value = "$($_.Status) - $($_.RowCount) row(s)" }
+                }
+            )
+
+            $subscriptionItems = @(@{ type = "FactSet"; facts = $subscriptionFacts })
+
+            if ($SubscriptionSummary.Count -gt $Limit) {
+                $subscriptionItems += @{
+                    type = "TextBlock"
+                    isSubtle = $true
+                    wrap = $true
+                    text = "Showing first $Limit of $($SubscriptionSummary.Count) subscriptions."
+                }
             }
         }
-    )
 
-    if ($notable.Count -gt 15) {
-        $resultContainers += @{
-            type = "TextBlock"
-            isSubtle = $true
-            wrap = $true
-            text = "Showing first 15 of $($notable.Count) notable rows. See runbook output for the full result set."
-        }
-    }
+        $resultContainers += @(
+            New-CollapsibleSection `
+                -Id "subscriptions" `
+                -Title "Subscriptions scanned ($($SubscriptionSummary.Count))" `
+                -Items $subscriptionItems
+        )
 
-    if ($SubscriptionSummary.Count -gt 0) {
-        $resultContainers += @{
-            type = "Container"
-            separator = $true
-            items = @(
+        @{
+            type = "message"
+            attachments = @(
                 @{
-                    type = "TextBlock"
-                    weight = "Bolder"
-                    text = "Subscriptions scanned"
-                    wrap = $true
-                },
-                @{
-                    type = "FactSet"
-                    facts = @(
-                        $SubscriptionSummary | ForEach-Object {
-                            @{ title = "$($_.SubscriptionName)"; value = "$($_.Status) - $($_.RowCount) row(s)" }
-                        }
-                    )
+                    contentType = "application/vnd.microsoft.card.adaptive"
+                    contentUrl = $null
+                    content = @{
+                        '$schema' = "http://adaptivecards.io/schemas/adaptive-card.json"
+                        type = "AdaptiveCard"
+                        version = "1.4"
+                        body = @(
+                            @{
+                                type = "TextBlock"
+                                size = "Large"
+                                weight = "Bolder"
+                                text = "CIDR Store Reconciliation Complete"
+                                wrap = $true
+                            },
+                            @{
+                                type = "FactSet"
+                                facts = @(
+                                    @{ title = "Table"; value = "$CidrStoreAccountName/$CidrStoreTableName" },
+                                    @{ title = "Dry run"; value = "$DryRun" },
+                                    @{ title = "Rows scanned"; value = "$RowsScanned" },
+                                    @{ title = "Removed"; value = "$removed" },
+                                    @{ title = "Would remove"; value = "$wouldRemove" },
+                                    @{ title = "Retained"; value = "$retained" },
+                                    @{ title = "Skipped"; value = "$skipped" },
+                                    @{ title = "Failed"; value = "$failed" }
+                                )
+                            }
+                        ) + $resultContainers
+                    }
                 }
             )
         }
     }
 
-    $payload = @{
-        type = "message"
-        attachments = @(
-            @{
-                contentType = "application/vnd.microsoft.card.adaptive"
-                contentUrl = $null
-                content = @{
-                    '$schema' = "http://adaptivecards.io/schemas/adaptive-card.json"
-                    type = "AdaptiveCard"
-                    version = "1.4"
-                    body = @(
-                        @{
-                            type = "TextBlock"
-                            size = "Large"
-                            weight = "Bolder"
-                            text = "CIDR Store Reconciliation Complete"
-                            wrap = $true
-                        },
-                        @{
-                            type = "FactSet"
-                            facts = @(
-                                @{ title = "Table"; value = "$CidrStoreAccountName/$CidrStoreTableName" },
-                                @{ title = "Dry run"; value = "$DryRun" },
-                                @{ title = "Rows scanned"; value = "$RowsScanned" },
-                                @{ title = "Removed"; value = "$removed" },
-                                @{ title = "Would remove"; value = "$wouldRemove" },
-                                @{ title = "Retained"; value = "$retained" },
-                                @{ title = "Skipped"; value = "$skipped" },
-                                @{ title = "Failed"; value = "$failed" }
-                            )
-                        }
-                    ) + $resultContainers
-                }
-            }
-        )
+    # Teams rejects cards over 28 KB outright. A fixed per-section row cap cannot hold that line -
+    # three full sections of long resource group names and verbose error text will breach it - so
+    # build the card and shrink the cap until it fits, keeping a margin for the Teams envelope.
+    $maxCardBytes = 26624
+    $json = $null
+
+    foreach ($limit in @(25, 15, 10, 5, 2, 1)) {
+        $json = (& $buildPayload $limit) | ConvertTo-Json -Depth 30 -Compress
+        $cardBytes = [System.Text.Encoding]::UTF8.GetByteCount($json)
+
+        if ($cardBytes -le $maxCardBytes) {
+            Write-Verbose "Teams card built at $cardBytes bytes with a per-section limit of $limit."
+            break
+        }
+
+        Write-Verbose "Teams card was $cardBytes bytes at a per-section limit of $limit. Shrinking."
     }
 
     try {
@@ -453,7 +630,7 @@ function Send-TeamsRunbookCard {
             -Method Post `
             -Uri $teamsWebhookUrl `
             -ContentType "application/json" `
-            -Body ($payload | ConvertTo-Json -Depth 30) | Out-Null
+            -Body $json | Out-Null
     }
     catch {
         Write-Warning "Failed to send Teams Adaptive Card: $_"
