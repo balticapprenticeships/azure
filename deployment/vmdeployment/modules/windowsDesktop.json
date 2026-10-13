@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.5.2",
+    "contentVersion": "4.1.0.0",
     "parameters": {
         "location": {
             "type": "string"
@@ -129,12 +129,6 @@
             },
             "DataLevel4Sql": {
                 "galleryImageDefinitionName": "BA-DataCourses"
-            },
-            "DMCC3": {
-                "galleryImageDefinitionName": "BA-DMContentCreator"
-            },
-            "DMCC4": {
-                "galleryImageDefinitionName": "BA-DMContentCreator"
             },
             "SWAPC5": {
                 "galleryImageDefinitionName": "BA-SWDCourse5"

@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.3.1",
+    "contentVersion": "4.1.0.0",
     "parameters": {
         "location": {
             "type": "string",
@@ -81,7 +81,6 @@
             "type": "string",
             "defaultValue": "noValue",
             "allowedValues": [
-                "l3DmCc",
                 "l3Data",
                 "l4Data",
                 "l5Data",
@@ -89,18 +88,6 @@
                 "exams",
                 "bootcamp"
             ]
-        },
-        "l3DmCcCourse": {
-            "type": "string",
-            "defaultValue": "NoValue",
-            "allowedValues": [
-                "NoValue",
-                "DMCC3",
-                "DMCC4"
-            ],
-            "metadata": {
-                "description": "Choose the course to deliver"
-            }
         },
         "l3DataCourse": {
             "type": "string",
@@ -361,11 +348,7 @@
             "SoftwareDevelopment": {
                 "keyVaultRg": "SWDRouteway",
                 "rwSuffix": "SWD"
-            },
-            "DigitalMarketing": {
-                "keyVaultRg": "DMRouteway",
-                "rwSuffix": "DM"
-            },            
+            },           
             "Data": {
                 "keyVaultRg": "DataRouteway",
                 "rwSuffix": "Data"
@@ -382,9 +365,6 @@
         "patchMode": "[if(equals(parameters('osPlatform'), 'Windows'), 'AutomaticByOS', 'ImageDefault')]",
         "licenseType": "AzureLicense",
         "courseImageValue": {
-            "l3DmCc": {
-                "courseImageDefinitionName": "[parameters('l3DmCcCourse')]"
-            },
             "l3Data": {
                 "courseImageDefinitionName": "[parameters('l3DataCourse')]"
             },

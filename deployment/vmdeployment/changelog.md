@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 
 # Windows Client User Interface
+## [4.5.0.0] 13.10.2026
+[uiWcDefinition]
+### Change
+  removed Digital marketing
 
 ## [4.0.1.0] 3.2.2026
 [uiWcDefinition]
@@ -48,6 +52,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   Updated contentVersion to 4.0.1.0
 
 # Windows Desktop Main
+
+## [4.1.0.0] 13.10.2026
+[desktopMain]
+### Change
+ removed Digital Marketing
 
 ## [4.0.2.0] 5.3.2026
 [desktopMain]
@@ -62,6 +71,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   Updated contentVersion to 4.0.1.0  
 
 # Modules
+
+## [4.1.0.0] 13.10.2026
+[windowsDesktop]
+### Change
+ removed Digital marketing
 
 ## [4.0.2.0] 5.3.2026
 [windowsDesktop]
