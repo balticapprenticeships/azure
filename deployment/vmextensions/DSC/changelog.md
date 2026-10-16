@@ -176,6 +176,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 # Windows Client Lab Config
 
+## [7.1.0] 13.10.26
+### change
+- [BaLabWinClientCfg]
+  updated Python path to 315
+
 ## [5.1.3] 20.10.23
 ### add
 - [BaLabWinClientCfg]
