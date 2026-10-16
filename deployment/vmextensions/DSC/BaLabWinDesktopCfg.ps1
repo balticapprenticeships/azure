@@ -1,7 +1,7 @@
 ################################################################
 # Script to configure Windows lab environment using DSC        #
 # Author: Chris Langford                                       #
-# Version: 7.0.6                                               #
+# Version: 7.1.0                                               #
 ################################################################
 
 Configuration BaWinDesktopLabCfg {
@@ -360,7 +360,7 @@ Configuration BaDataLevel4LabCfg {
             GetScript = { @{ Result = "Checking Python modules" } }
 
             TestScript = {
-                $pythonPath = "C:\Program Files\Python314\python.exe"
+                $pythonPath = "C:\Program Files\Python315\python.exe"
                 if (-not (Test-Path $pythonPath)) { return $false }
 
                 $modules = @("numpy","pandas","scikit-learn","statsmodels","matplotlib","seaborn","scipy")
@@ -373,7 +373,7 @@ Configuration BaDataLevel4LabCfg {
             }
 
             SetScript = {
-                $pythonPath = "C:\Program Files\Python314\python.exe"
+                $pythonPath = "C:\Program Files\Python315\python.exe"
 
                 # Ensure pip is up-to-date
                 & $pythonPath -m ensurepip --upgrade
@@ -584,7 +584,7 @@ Configuration BaDataLevel5LabCfg {
             GetScript = { @{ Result = "Checking Python modules" } }
 
             TestScript = {
-                $pythonPath = "C:\Program Files\Python314\python.exe"
+                $pythonPath = "C:\Program Files\Python315\python.exe"
                 if (-not (Test-Path $pythonPath)) { return $false }
 
                 $modules = @("numpy","pandas","scikit-learn","statsmodels","matplotlib","seaborn","scipy")
@@ -597,7 +597,7 @@ Configuration BaDataLevel5LabCfg {
             }
 
             SetScript = {
-                $pythonPath = "C:\Program Files\Python314\python.exe"
+                $pythonPath = "C:\Program Files\Python315\python.exe"
 
                 # Ensure pip is up-to-date
                 & $pythonPath -m ensurepip --upgrade
