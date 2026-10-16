@@ -1,5 +1,5 @@
 <#
-.version 3.2.2
+.version 3.2.3
 .AUTHOR Chris Langford
 .SYNOPSIS
     This script automates the creation of spoke virtual networks in each resource group of a subscription, assigns them CIDR blocks from a defined range, and peers them with a central firewall VNet. It also tags the VNets and applies a resource lock to prevent accidental deletion.
@@ -164,6 +164,12 @@ if ($WebhookData) {
     if ($rgEvent.subject -match '/resourceGroups/([^/]+)$') {
         $triggeringResourceGroupName = $Matches[1]
         Write-Output "Scoping this run to the triggering resource group: $triggeringResourceGroupName"
+    }
+    # Added 16.10.2026: An unrecognised webhook subject falls back to scanning the subscription. 
+    # if resource group extraction fails, execution continues without $triggeringResourceGroupName.
+    # The filter then takes its subscription-wide branch. Add an else that throws so a malformed webhook event cannot cause that fallback:
+    else {
+        throw "Cannot extract resource group name from the webhook event subject: $($rgEvent.subject)"
     }
 }
 
@@ -416,8 +422,10 @@ function Invoke-CidrConcurrencyRetry {
             if (-not (Test-CidrConcurrencyConflict -ErrorRecord $_)) {
                 throw
             }
-
-            Write-Output "CIDR allocation changed concurrently. Retrying..."
+            # Changed 16.10.2026: from Write-Output to Write-Verbos. he CIDR retry helper 
+            # can also mix logging with returned data and can contaminate the allocation 
+            # result after a retry. Change that to Write-Verbose as well.
+            Write-Verbose "CIDR allocation changed concurrently. Retrying..."
             Start-Sleep -Seconds $RetrySeconds
         }
     }
@@ -1163,18 +1171,18 @@ $rgs = Invoke-InSpokeSubscription {
             }
 
             if ($matchedExcludePattern) {
-                Write-Output "Triggering resource group '$($_.ResourceGroupName)' matches exclude pattern '$matchedExcludePattern'. Skipping."
+                Write-Verbose "Triggering resource group '$($_.ResourceGroupName)' matches exclude pattern '$matchedExcludePattern'. Skipping." -Verbose
                 return $false
             }
 
             if ($IncludeRgTagName) {
                 if (-not $_.Tags -or -not $_.Tags.ContainsKey($IncludeRgTagName)) {
-                    Write-Output "Triggering resource group '$($_.ResourceGroupName)' does not have the required tag '$IncludeRgTagName'. Skipping."
+                    Write-Verbose "Triggering resource group '$($_.ResourceGroupName)' does not have the required tag '$IncludeRgTagName'. Skipping." -Verbose
                     return $false
                 }
 
                 if ($IncludeRgTagValue -and $_.Tags[$IncludeRgTagName] -ne $IncludeRgTagValue) {
-                    Write-Output "Triggering resource group '$($_.ResourceGroupName)' tag '$IncludeRgTagName' does not equal '$IncludeRgTagValue'. Skipping."
+                    Write-Verbose "Triggering resource group '$($_.ResourceGroupName)' tag '$IncludeRgTagName' does not equal '$IncludeRgTagValue'. Skipping." -Verbose
                     return $false
                 }
             }
@@ -1192,7 +1200,7 @@ $rgs = Invoke-InSpokeSubscription {
             if ($matchedExcludePattern) {
                 # Logged, not silent: a badly written pattern that over-matches is otherwise
                 # invisible here, and looks identical to a resource group simply not being tagged.
-                Write-Output "Resource group '$($_.ResourceGroupName)' matches exclude pattern '$matchedExcludePattern'. Skipping."
+                Write-Verbose "Resource group '$($_.ResourceGroupName)' matches exclude pattern '$matchedExcludePattern'. Skipping." -Verbose
                 return $false
             }
 
