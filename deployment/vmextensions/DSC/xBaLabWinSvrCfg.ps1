@@ -1,7 +1,7 @@
 ################################################################
 # Script to configure Windows lab environment using DSC        #
 # Author: Chris Langford                                       #
-# Version: 6.0.0                                               #
+# Version: 7.0.0                                               #
 ################################################################
 
 Configuration xBaICTSupC1LabCfg {
@@ -115,6 +115,163 @@ Configuration xBaICTSupC1LabCfg {
             TestScript = { $false }
             GetScript = { 
                 # Do Nothing
+            }
+        }
+
+        # This resource block sets Performance Options -> Visual Effects to
+        # "Adjust for best performance" for every user: the Default profile (so any
+        # account created later inherits it), every profile already on disk, and any
+        # hive that is currently loaded. These are per-user (HKCU) settings, so there
+        # is no single machine-wide value to set.
+        xScript "SetVisualEffectsBestPerformance"
+        {
+            SetScript = {
+                $ErrorActionPreference = "Stop"
+
+                # The values Windows writes itself when "Adjust for best performance" is picked
+                $dwordValues = @{
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                }
+
+                $stringValues = @{
+                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                }
+
+                $binaryValues = @{
+                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                }
+
+                function Set-VisualEffects {
+                    param ([string] $HiveRoot)
+
+                    foreach ($set in @(
+                        @{ Values = $dwordValues;  Type = "DWord"  },
+                        @{ Values = $stringValues; Type = "String" },
+                        @{ Values = $binaryValues; Type = "Binary" }
+                    )) {
+                        foreach ($subKey in $set.Values.Keys) {
+                            $keyPath = Join-Path -Path $HiveRoot -ChildPath $subKey
+                            if (-not (Test-Path -Path $keyPath)) {
+                                New-Item -Path $keyPath -Force | Out-Null
+                            }
+                            foreach ($name in $set.Values[$subKey].Keys) {
+                                New-ItemProperty -Path $keyPath -Name $name -Value $set.Values[$subKey][$name] -PropertyType $set.Type -Force | Out-Null
+                            }
+                        }
+                    }
+                }
+
+                # Hives of real users that are already loaded. The S-1-5-21-* filter
+                # deliberately skips the built-in service accounts (S-1-5-18/19/20) and
+                # .DEFAULT, which is an alias for LocalSystem rather than the Default
+                # profile and so has no bearing on accounts created later.
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
+                }
+
+                # Profiles on disk whose hive is not loaded, plus the Default profile
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSC_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { continue }
+
+                    try {
+                        Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$mountName"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+            }
+
+            TestScript = {
+                # In desired state when VisualFXSetting is 2 in every loaded hive and in
+                # every profile on disk, including the Default profile
+                # Must use the same SID filter as SetScript, or the hives SetScript
+                # deliberately skips would keep this test returning $false for ever
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                    if ($value -ne 2) { return $false }
+                }
+
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSCTest_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        if ($value -ne 2) { return $false }
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+
+                return $true
+            }
+
+            GetScript = {
+                $hiveFile = "$env:SystemDrive\Users\Default\NTUSER.DAT"
+                $result = "Unknown"
+
+                & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        $result = "Default profile VisualFXSetting = $value"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\DSCGet_DefaultUser" | Out-Null
+                    }
+                }
+
+                return @{ Result = $result }
             }
         }
         
@@ -247,6 +404,163 @@ Configuration xBaICTSupC2LabCfg {
                 # Do Nothing
             }
         }
+
+        # This resource block sets Performance Options -> Visual Effects to
+        # "Adjust for best performance" for every user: the Default profile (so any
+        # account created later inherits it), every profile already on disk, and any
+        # hive that is currently loaded. These are per-user (HKCU) settings, so there
+        # is no single machine-wide value to set.
+        xScript "SetVisualEffectsBestPerformance"
+        {
+            SetScript = {
+                $ErrorActionPreference = "Stop"
+
+                # The values Windows writes itself when "Adjust for best performance" is picked
+                $dwordValues = @{
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                }
+
+                $stringValues = @{
+                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                }
+
+                $binaryValues = @{
+                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                }
+
+                function Set-VisualEffects {
+                    param ([string] $HiveRoot)
+
+                    foreach ($set in @(
+                        @{ Values = $dwordValues;  Type = "DWord"  },
+                        @{ Values = $stringValues; Type = "String" },
+                        @{ Values = $binaryValues; Type = "Binary" }
+                    )) {
+                        foreach ($subKey in $set.Values.Keys) {
+                            $keyPath = Join-Path -Path $HiveRoot -ChildPath $subKey
+                            if (-not (Test-Path -Path $keyPath)) {
+                                New-Item -Path $keyPath -Force | Out-Null
+                            }
+                            foreach ($name in $set.Values[$subKey].Keys) {
+                                New-ItemProperty -Path $keyPath -Name $name -Value $set.Values[$subKey][$name] -PropertyType $set.Type -Force | Out-Null
+                            }
+                        }
+                    }
+                }
+
+                # Hives of real users that are already loaded. The S-1-5-21-* filter
+                # deliberately skips the built-in service accounts (S-1-5-18/19/20) and
+                # .DEFAULT, which is an alias for LocalSystem rather than the Default
+                # profile and so has no bearing on accounts created later.
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
+                }
+
+                # Profiles on disk whose hive is not loaded, plus the Default profile
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSC_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { continue }
+
+                    try {
+                        Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$mountName"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+            }
+
+            TestScript = {
+                # In desired state when VisualFXSetting is 2 in every loaded hive and in
+                # every profile on disk, including the Default profile
+                # Must use the same SID filter as SetScript, or the hives SetScript
+                # deliberately skips would keep this test returning $false for ever
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                    if ($value -ne 2) { return $false }
+                }
+
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSCTest_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        if ($value -ne 2) { return $false }
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+
+                return $true
+            }
+
+            GetScript = {
+                $hiveFile = "$env:SystemDrive\Users\Default\NTUSER.DAT"
+                $result = "Unknown"
+
+                & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        $result = "Default profile VisualFXSetting = $value"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\DSCGet_DefaultUser" | Out-Null
+                    }
+                }
+
+                return @{ Result = $result }
+            }
+        }
         
         # This resource block ensures that the file or command is executed
         xScript "RemoveArtifacts"
@@ -256,6 +570,8 @@ Configuration xBaICTSupC2LabCfg {
                 Remove-Item "C:\workflow-artifacts" -Force
                 Remove-Item "C:\workflow-artifacts.zip" -Force
                 Remove-Item "C:\*_buildlog.log" -Force
+                Remove-Item "C:\ISOs\*" -Recurse -Force
+                Remove-Item "C:\ISOs" -Force
             }
             TestScript = { $false }
             GetScript = { 
@@ -388,6 +704,163 @@ Configuration xBaICTSupC3LabCfg {
             TestScript = { $false }
             GetScript = { 
                 # Do Nothing
+            }
+        }
+
+        # This resource block sets Performance Options -> Visual Effects to
+        # "Adjust for best performance" for every user: the Default profile (so any
+        # account created later inherits it), every profile already on disk, and any
+        # hive that is currently loaded. These are per-user (HKCU) settings, so there
+        # is no single machine-wide value to set.
+        xScript "SetVisualEffectsBestPerformance"
+        {
+            SetScript = {
+                $ErrorActionPreference = "Stop"
+
+                # The values Windows writes itself when "Adjust for best performance" is picked
+                $dwordValues = @{
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                }
+
+                $stringValues = @{
+                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                }
+
+                $binaryValues = @{
+                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                }
+
+                function Set-VisualEffects {
+                    param ([string] $HiveRoot)
+
+                    foreach ($set in @(
+                        @{ Values = $dwordValues;  Type = "DWord"  },
+                        @{ Values = $stringValues; Type = "String" },
+                        @{ Values = $binaryValues; Type = "Binary" }
+                    )) {
+                        foreach ($subKey in $set.Values.Keys) {
+                            $keyPath = Join-Path -Path $HiveRoot -ChildPath $subKey
+                            if (-not (Test-Path -Path $keyPath)) {
+                                New-Item -Path $keyPath -Force | Out-Null
+                            }
+                            foreach ($name in $set.Values[$subKey].Keys) {
+                                New-ItemProperty -Path $keyPath -Name $name -Value $set.Values[$subKey][$name] -PropertyType $set.Type -Force | Out-Null
+                            }
+                        }
+                    }
+                }
+
+                # Hives of real users that are already loaded. The S-1-5-21-* filter
+                # deliberately skips the built-in service accounts (S-1-5-18/19/20) and
+                # .DEFAULT, which is an alias for LocalSystem rather than the Default
+                # profile and so has no bearing on accounts created later.
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
+                }
+
+                # Profiles on disk whose hive is not loaded, plus the Default profile
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSC_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { continue }
+
+                    try {
+                        Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$mountName"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+            }
+
+            TestScript = {
+                # In desired state when VisualFXSetting is 2 in every loaded hive and in
+                # every profile on disk, including the Default profile
+                # Must use the same SID filter as SetScript, or the hives SetScript
+                # deliberately skips would keep this test returning $false for ever
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                    if ($value -ne 2) { return $false }
+                }
+
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSCTest_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        if ($value -ne 2) { return $false }
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+
+                return $true
+            }
+
+            GetScript = {
+                $hiveFile = "$env:SystemDrive\Users\Default\NTUSER.DAT"
+                $result = "Unknown"
+
+                & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        $result = "Default profile VisualFXSetting = $value"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\DSCGet_DefaultUser" | Out-Null
+                    }
+                }
+
+                return @{ Result = $result }
             }
         }
 
@@ -534,6 +1007,163 @@ Configuration xBaICTSupC4LabCfg {
             }
         }
 
+        # This resource block sets Performance Options -> Visual Effects to
+        # "Adjust for best performance" for every user: the Default profile (so any
+        # account created later inherits it), every profile already on disk, and any
+        # hive that is currently loaded. These are per-user (HKCU) settings, so there
+        # is no single machine-wide value to set.
+        xScript "SetVisualEffectsBestPerformance"
+        {
+            SetScript = {
+                $ErrorActionPreference = "Stop"
+
+                # The values Windows writes itself when "Adjust for best performance" is picked
+                $dwordValues = @{
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                }
+
+                $stringValues = @{
+                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                }
+
+                $binaryValues = @{
+                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                }
+
+                function Set-VisualEffects {
+                    param ([string] $HiveRoot)
+
+                    foreach ($set in @(
+                        @{ Values = $dwordValues;  Type = "DWord"  },
+                        @{ Values = $stringValues; Type = "String" },
+                        @{ Values = $binaryValues; Type = "Binary" }
+                    )) {
+                        foreach ($subKey in $set.Values.Keys) {
+                            $keyPath = Join-Path -Path $HiveRoot -ChildPath $subKey
+                            if (-not (Test-Path -Path $keyPath)) {
+                                New-Item -Path $keyPath -Force | Out-Null
+                            }
+                            foreach ($name in $set.Values[$subKey].Keys) {
+                                New-ItemProperty -Path $keyPath -Name $name -Value $set.Values[$subKey][$name] -PropertyType $set.Type -Force | Out-Null
+                            }
+                        }
+                    }
+                }
+
+                # Hives of real users that are already loaded. The S-1-5-21-* filter
+                # deliberately skips the built-in service accounts (S-1-5-18/19/20) and
+                # .DEFAULT, which is an alias for LocalSystem rather than the Default
+                # profile and so has no bearing on accounts created later.
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
+                }
+
+                # Profiles on disk whose hive is not loaded, plus the Default profile
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSC_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { continue }
+
+                    try {
+                        Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$mountName"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+            }
+
+            TestScript = {
+                # In desired state when VisualFXSetting is 2 in every loaded hive and in
+                # every profile on disk, including the Default profile
+                # Must use the same SID filter as SetScript, or the hives SetScript
+                # deliberately skips would keep this test returning $false for ever
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                    if ($value -ne 2) { return $false }
+                }
+
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSCTest_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        if ($value -ne 2) { return $false }
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+
+                return $true
+            }
+
+            GetScript = {
+                $hiveFile = "$env:SystemDrive\Users\Default\NTUSER.DAT"
+                $result = "Unknown"
+
+                & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        $result = "Default profile VisualFXSetting = $value"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\DSCGet_DefaultUser" | Out-Null
+                    }
+                }
+
+                return @{ Result = $result }
+            }
+        }
+
         # This resource block ensures that the file or command is executed
         xScript "RemoveArtifacts"
         {
@@ -677,6 +1307,163 @@ Configuration xBaICTSupC6LabCfg {
             }
         }
 
+        # This resource block sets Performance Options -> Visual Effects to
+        # "Adjust for best performance" for every user: the Default profile (so any
+        # account created later inherits it), every profile already on disk, and any
+        # hive that is currently loaded. These are per-user (HKCU) settings, so there
+        # is no single machine-wide value to set.
+        xScript "SetVisualEffectsBestPerformance"
+        {
+            SetScript = {
+                $ErrorActionPreference = "Stop"
+
+                # The values Windows writes itself when "Adjust for best performance" is picked
+                $dwordValues = @{
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                }
+
+                $stringValues = @{
+                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                }
+
+                $binaryValues = @{
+                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                }
+
+                function Set-VisualEffects {
+                    param ([string] $HiveRoot)
+
+                    foreach ($set in @(
+                        @{ Values = $dwordValues;  Type = "DWord"  },
+                        @{ Values = $stringValues; Type = "String" },
+                        @{ Values = $binaryValues; Type = "Binary" }
+                    )) {
+                        foreach ($subKey in $set.Values.Keys) {
+                            $keyPath = Join-Path -Path $HiveRoot -ChildPath $subKey
+                            if (-not (Test-Path -Path $keyPath)) {
+                                New-Item -Path $keyPath -Force | Out-Null
+                            }
+                            foreach ($name in $set.Values[$subKey].Keys) {
+                                New-ItemProperty -Path $keyPath -Name $name -Value $set.Values[$subKey][$name] -PropertyType $set.Type -Force | Out-Null
+                            }
+                        }
+                    }
+                }
+
+                # Hives of real users that are already loaded. The S-1-5-21-* filter
+                # deliberately skips the built-in service accounts (S-1-5-18/19/20) and
+                # .DEFAULT, which is an alias for LocalSystem rather than the Default
+                # profile and so has no bearing on accounts created later.
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
+                }
+
+                # Profiles on disk whose hive is not loaded, plus the Default profile
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSC_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { continue }
+
+                    try {
+                        Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$mountName"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+            }
+
+            TestScript = {
+                # In desired state when VisualFXSetting is 2 in every loaded hive and in
+                # every profile on disk, including the Default profile
+                # Must use the same SID filter as SetScript, or the hives SetScript
+                # deliberately skips would keep this test returning $false for ever
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                    if ($value -ne 2) { return $false }
+                }
+
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSCTest_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        if ($value -ne 2) { return $false }
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+
+                return $true
+            }
+
+            GetScript = {
+                $hiveFile = "$env:SystemDrive\Users\Default\NTUSER.DAT"
+                $result = "Unknown"
+
+                & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        $result = "Default profile VisualFXSetting = $value"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\DSCGet_DefaultUser" | Out-Null
+                    }
+                }
+
+                return @{ Result = $result }
+            }
+        }
+
         # This resource block ensures that the file or command is executed
         xScript "RemoveArtifacts"
         {
@@ -753,6 +1540,163 @@ Configuration xBaICTNetEPALabCfg {
             TestScript = { $false }
             GetScript = { 
                 # Do Nothing
+            }
+        }
+
+        # This resource block sets Performance Options -> Visual Effects to
+        # "Adjust for best performance" for every user: the Default profile (so any
+        # account created later inherits it), every profile already on disk, and any
+        # hive that is currently loaded. These are per-user (HKCU) settings, so there
+        # is no single machine-wide value to set.
+        xScript "SetVisualEffectsBestPerformance"
+        {
+            SetScript = {
+                $ErrorActionPreference = "Stop"
+
+                # The values Windows writes itself when "Adjust for best performance" is picked
+                $dwordValues = @{
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                }
+
+                $stringValues = @{
+                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                }
+
+                $binaryValues = @{
+                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                }
+
+                function Set-VisualEffects {
+                    param ([string] $HiveRoot)
+
+                    foreach ($set in @(
+                        @{ Values = $dwordValues;  Type = "DWord"  },
+                        @{ Values = $stringValues; Type = "String" },
+                        @{ Values = $binaryValues; Type = "Binary" }
+                    )) {
+                        foreach ($subKey in $set.Values.Keys) {
+                            $keyPath = Join-Path -Path $HiveRoot -ChildPath $subKey
+                            if (-not (Test-Path -Path $keyPath)) {
+                                New-Item -Path $keyPath -Force | Out-Null
+                            }
+                            foreach ($name in $set.Values[$subKey].Keys) {
+                                New-ItemProperty -Path $keyPath -Name $name -Value $set.Values[$subKey][$name] -PropertyType $set.Type -Force | Out-Null
+                            }
+                        }
+                    }
+                }
+
+                # Hives of real users that are already loaded. The S-1-5-21-* filter
+                # deliberately skips the built-in service accounts (S-1-5-18/19/20) and
+                # .DEFAULT, which is an alias for LocalSystem rather than the Default
+                # profile and so has no bearing on accounts created later.
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
+                }
+
+                # Profiles on disk whose hive is not loaded, plus the Default profile
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSC_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { continue }
+
+                    try {
+                        Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$mountName"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+            }
+
+            TestScript = {
+                # In desired state when VisualFXSetting is 2 in every loaded hive and in
+                # every profile on disk, including the Default profile
+                # Must use the same SID filter as SetScript, or the hives SetScript
+                # deliberately skips would keep this test returning $false for ever
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                    if ($value -ne 2) { return $false }
+                }
+
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSCTest_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        if ($value -ne 2) { return $false }
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+
+                return $true
+            }
+
+            GetScript = {
+                $hiveFile = "$env:SystemDrive\Users\Default\NTUSER.DAT"
+                $result = "Unknown"
+
+                & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        $result = "Default profile VisualFXSetting = $value"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\DSCGet_DefaultUser" | Out-Null
+                    }
+                }
+
+                return @{ Result = $result }
             }
         }
 
@@ -896,6 +1840,163 @@ Configuration xBaICTSupMstrLabCfg {
             TestScript = { $false }
             GetScript = { 
                 # Do Nothing
+            }
+        }
+
+        # This resource block sets Performance Options -> Visual Effects to
+        # "Adjust for best performance" for every user: the Default profile (so any
+        # account created later inherits it), every profile already on disk, and any
+        # hive that is currently loaded. These are per-user (HKCU) settings, so there
+        # is no single machine-wide value to set.
+        xScript "SetVisualEffectsBestPerformance"
+        {
+            SetScript = {
+                $ErrorActionPreference = "Stop"
+
+                # The values Windows writes itself when "Adjust for best performance" is picked
+                $dwordValues = @{
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                }
+
+                $stringValues = @{
+                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                }
+
+                $binaryValues = @{
+                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                }
+
+                function Set-VisualEffects {
+                    param ([string] $HiveRoot)
+
+                    foreach ($set in @(
+                        @{ Values = $dwordValues;  Type = "DWord"  },
+                        @{ Values = $stringValues; Type = "String" },
+                        @{ Values = $binaryValues; Type = "Binary" }
+                    )) {
+                        foreach ($subKey in $set.Values.Keys) {
+                            $keyPath = Join-Path -Path $HiveRoot -ChildPath $subKey
+                            if (-not (Test-Path -Path $keyPath)) {
+                                New-Item -Path $keyPath -Force | Out-Null
+                            }
+                            foreach ($name in $set.Values[$subKey].Keys) {
+                                New-ItemProperty -Path $keyPath -Name $name -Value $set.Values[$subKey][$name] -PropertyType $set.Type -Force | Out-Null
+                            }
+                        }
+                    }
+                }
+
+                # Hives of real users that are already loaded. The S-1-5-21-* filter
+                # deliberately skips the built-in service accounts (S-1-5-18/19/20) and
+                # .DEFAULT, which is an alias for LocalSystem rather than the Default
+                # profile and so has no bearing on accounts created later.
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
+                }
+
+                # Profiles on disk whose hive is not loaded, plus the Default profile
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSC_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { continue }
+
+                    try {
+                        Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$mountName"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+            }
+
+            TestScript = {
+                # In desired state when VisualFXSetting is 2 in every loaded hive and in
+                # every profile on disk, including the Default profile
+                # Must use the same SID filter as SetScript, or the hives SetScript
+                # deliberately skips would keep this test returning $false for ever
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                    if ($value -ne 2) { return $false }
+                }
+
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSCTest_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        if ($value -ne 2) { return $false }
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+
+                return $true
+            }
+
+            GetScript = {
+                $hiveFile = "$env:SystemDrive\Users\Default\NTUSER.DAT"
+                $result = "Unknown"
+
+                & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        $result = "Default profile VisualFXSetting = $value"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\DSCGet_DefaultUser" | Out-Null
+                    }
+                }
+
+                return @{ Result = $result }
             }
         }
 
@@ -1062,6 +2163,163 @@ Configuration xBaL4NetEngC4LabCfg {
             }
         }
 
+        # This resource block sets Performance Options -> Visual Effects to
+        # "Adjust for best performance" for every user: the Default profile (so any
+        # account created later inherits it), every profile already on disk, and any
+        # hive that is currently loaded. These are per-user (HKCU) settings, so there
+        # is no single machine-wide value to set.
+        xScript "SetVisualEffectsBestPerformance"
+        {
+            SetScript = {
+                $ErrorActionPreference = "Stop"
+
+                # The values Windows writes itself when "Adjust for best performance" is picked
+                $dwordValues = @{
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                }
+
+                $stringValues = @{
+                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                }
+
+                $binaryValues = @{
+                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                }
+
+                function Set-VisualEffects {
+                    param ([string] $HiveRoot)
+
+                    foreach ($set in @(
+                        @{ Values = $dwordValues;  Type = "DWord"  },
+                        @{ Values = $stringValues; Type = "String" },
+                        @{ Values = $binaryValues; Type = "Binary" }
+                    )) {
+                        foreach ($subKey in $set.Values.Keys) {
+                            $keyPath = Join-Path -Path $HiveRoot -ChildPath $subKey
+                            if (-not (Test-Path -Path $keyPath)) {
+                                New-Item -Path $keyPath -Force | Out-Null
+                            }
+                            foreach ($name in $set.Values[$subKey].Keys) {
+                                New-ItemProperty -Path $keyPath -Name $name -Value $set.Values[$subKey][$name] -PropertyType $set.Type -Force | Out-Null
+                            }
+                        }
+                    }
+                }
+
+                # Hives of real users that are already loaded. The S-1-5-21-* filter
+                # deliberately skips the built-in service accounts (S-1-5-18/19/20) and
+                # .DEFAULT, which is an alias for LocalSystem rather than the Default
+                # profile and so has no bearing on accounts created later.
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
+                }
+
+                # Profiles on disk whose hive is not loaded, plus the Default profile
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSC_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { continue }
+
+                    try {
+                        Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$mountName"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+            }
+
+            TestScript = {
+                # In desired state when VisualFXSetting is 2 in every loaded hive and in
+                # every profile on disk, including the Default profile
+                # Must use the same SID filter as SetScript, or the hives SetScript
+                # deliberately skips would keep this test returning $false for ever
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                    if ($value -ne 2) { return $false }
+                }
+
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSCTest_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        if ($value -ne 2) { return $false }
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+
+                return $true
+            }
+
+            GetScript = {
+                $hiveFile = "$env:SystemDrive\Users\Default\NTUSER.DAT"
+                $result = "Unknown"
+
+                & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        $result = "Default profile VisualFXSetting = $value"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\DSCGet_DefaultUser" | Out-Null
+                    }
+                }
+
+                return @{ Result = $result }
+            }
+        }
+
         # This resource block ensures that the file or command is executed
         xScript "RemoveArtifacts"
         {
@@ -1152,6 +2410,163 @@ Configuration xBaL4NetEngC5LabCfg {
             DependsOn = "[xWindowsFeatureSet]AddHyperVFeatures"
         }
 
+        # This resource block sets Performance Options -> Visual Effects to
+        # "Adjust for best performance" for every user: the Default profile (so any
+        # account created later inherits it), every profile already on disk, and any
+        # hive that is currently loaded. These are per-user (HKCU) settings, so there
+        # is no single machine-wide value to set.
+        xScript "SetVisualEffectsBestPerformance"
+        {
+            SetScript = {
+                $ErrorActionPreference = "Stop"
+
+                # The values Windows writes itself when "Adjust for best performance" is picked
+                $dwordValues = @{
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                }
+
+                $stringValues = @{
+                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                }
+
+                $binaryValues = @{
+                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                }
+
+                function Set-VisualEffects {
+                    param ([string] $HiveRoot)
+
+                    foreach ($set in @(
+                        @{ Values = $dwordValues;  Type = "DWord"  },
+                        @{ Values = $stringValues; Type = "String" },
+                        @{ Values = $binaryValues; Type = "Binary" }
+                    )) {
+                        foreach ($subKey in $set.Values.Keys) {
+                            $keyPath = Join-Path -Path $HiveRoot -ChildPath $subKey
+                            if (-not (Test-Path -Path $keyPath)) {
+                                New-Item -Path $keyPath -Force | Out-Null
+                            }
+                            foreach ($name in $set.Values[$subKey].Keys) {
+                                New-ItemProperty -Path $keyPath -Name $name -Value $set.Values[$subKey][$name] -PropertyType $set.Type -Force | Out-Null
+                            }
+                        }
+                    }
+                }
+
+                # Hives of real users that are already loaded. The S-1-5-21-* filter
+                # deliberately skips the built-in service accounts (S-1-5-18/19/20) and
+                # .DEFAULT, which is an alias for LocalSystem rather than the Default
+                # profile and so has no bearing on accounts created later.
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
+                }
+
+                # Profiles on disk whose hive is not loaded, plus the Default profile
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSC_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { continue }
+
+                    try {
+                        Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$mountName"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+            }
+
+            TestScript = {
+                # In desired state when VisualFXSetting is 2 in every loaded hive and in
+                # every profile on disk, including the Default profile
+                # Must use the same SID filter as SetScript, or the hives SetScript
+                # deliberately skips would keep this test returning $false for ever
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                    if ($value -ne 2) { return $false }
+                }
+
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSCTest_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        if ($value -ne 2) { return $false }
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+
+                return $true
+            }
+
+            GetScript = {
+                $hiveFile = "$env:SystemDrive\Users\Default\NTUSER.DAT"
+                $result = "Unknown"
+
+                & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        $result = "Default profile VisualFXSetting = $value"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\DSCGet_DefaultUser" | Out-Null
+                    }
+                }
+
+                return @{ Result = $result }
+            }
+        }
+
         # This resource block ensures that the file or command is executed
         xScript "RemoveArtifacts"
         {
@@ -1240,6 +2655,163 @@ Configuration xBaL4NetEngC7LabCfg {
                 # Do nothing
             }
             DependsOn = "[xWindowsFeatureSet]AddHyperVFeatures"
+        }
+
+        # This resource block sets Performance Options -> Visual Effects to
+        # "Adjust for best performance" for every user: the Default profile (so any
+        # account created later inherits it), every profile already on disk, and any
+        # hive that is currently loaded. These are per-user (HKCU) settings, so there
+        # is no single machine-wide value to set.
+        xScript "SetVisualEffectsBestPerformance"
+        {
+            SetScript = {
+                $ErrorActionPreference = "Stop"
+
+                # The values Windows writes itself when "Adjust for best performance" is picked
+                $dwordValues = @{
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                }
+
+                $stringValues = @{
+                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                }
+
+                $binaryValues = @{
+                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                }
+
+                function Set-VisualEffects {
+                    param ([string] $HiveRoot)
+
+                    foreach ($set in @(
+                        @{ Values = $dwordValues;  Type = "DWord"  },
+                        @{ Values = $stringValues; Type = "String" },
+                        @{ Values = $binaryValues; Type = "Binary" }
+                    )) {
+                        foreach ($subKey in $set.Values.Keys) {
+                            $keyPath = Join-Path -Path $HiveRoot -ChildPath $subKey
+                            if (-not (Test-Path -Path $keyPath)) {
+                                New-Item -Path $keyPath -Force | Out-Null
+                            }
+                            foreach ($name in $set.Values[$subKey].Keys) {
+                                New-ItemProperty -Path $keyPath -Name $name -Value $set.Values[$subKey][$name] -PropertyType $set.Type -Force | Out-Null
+                            }
+                        }
+                    }
+                }
+
+                # Hives of real users that are already loaded. The S-1-5-21-* filter
+                # deliberately skips the built-in service accounts (S-1-5-18/19/20) and
+                # .DEFAULT, which is an alias for LocalSystem rather than the Default
+                # profile and so has no bearing on accounts created later.
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
+                }
+
+                # Profiles on disk whose hive is not loaded, plus the Default profile
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSC_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { continue }
+
+                    try {
+                        Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$mountName"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+            }
+
+            TestScript = {
+                # In desired state when VisualFXSetting is 2 in every loaded hive and in
+                # every profile on disk, including the Default profile
+                # Must use the same SID filter as SetScript, or the hives SetScript
+                # deliberately skips would keep this test returning $false for ever
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                    if ($value -ne 2) { return $false }
+                }
+
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSCTest_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        if ($value -ne 2) { return $false }
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+
+                return $true
+            }
+
+            GetScript = {
+                $hiveFile = "$env:SystemDrive\Users\Default\NTUSER.DAT"
+                $result = "Unknown"
+
+                & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        $result = "Default profile VisualFXSetting = $value"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\DSCGet_DefaultUser" | Out-Null
+                    }
+                }
+
+                return @{ Result = $result }
+            }
         }
 
         # This resource block ensures that the file or command is executed
@@ -1379,6 +2951,163 @@ Configuration xBaItBootcampLabCfg {
             TestScript = { $false }
             GetScript = { 
                 # Do Nothing
+            }
+        }
+
+        # This resource block sets Performance Options -> Visual Effects to
+        # "Adjust for best performance" for every user: the Default profile (so any
+        # account created later inherits it), every profile already on disk, and any
+        # hive that is currently loaded. These are per-user (HKCU) settings, so there
+        # is no single machine-wide value to set.
+        xScript "SetVisualEffectsBestPerformance"
+        {
+            SetScript = {
+                $ErrorActionPreference = "Stop"
+
+                # The values Windows writes itself when "Adjust for best performance" is picked
+                $dwordValues = @{
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                }
+
+                $stringValues = @{
+                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                }
+
+                $binaryValues = @{
+                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                }
+
+                function Set-VisualEffects {
+                    param ([string] $HiveRoot)
+
+                    foreach ($set in @(
+                        @{ Values = $dwordValues;  Type = "DWord"  },
+                        @{ Values = $stringValues; Type = "String" },
+                        @{ Values = $binaryValues; Type = "Binary" }
+                    )) {
+                        foreach ($subKey in $set.Values.Keys) {
+                            $keyPath = Join-Path -Path $HiveRoot -ChildPath $subKey
+                            if (-not (Test-Path -Path $keyPath)) {
+                                New-Item -Path $keyPath -Force | Out-Null
+                            }
+                            foreach ($name in $set.Values[$subKey].Keys) {
+                                New-ItemProperty -Path $keyPath -Name $name -Value $set.Values[$subKey][$name] -PropertyType $set.Type -Force | Out-Null
+                            }
+                        }
+                    }
+                }
+
+                # Hives of real users that are already loaded. The S-1-5-21-* filter
+                # deliberately skips the built-in service accounts (S-1-5-18/19/20) and
+                # .DEFAULT, which is an alias for LocalSystem rather than the Default
+                # profile and so has no bearing on accounts created later.
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
+                }
+
+                # Profiles on disk whose hive is not loaded, plus the Default profile
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSC_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { continue }
+
+                    try {
+                        Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$mountName"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+            }
+
+            TestScript = {
+                # In desired state when VisualFXSetting is 2 in every loaded hive and in
+                # every profile on disk, including the Default profile
+                # Must use the same SID filter as SetScript, or the hives SetScript
+                # deliberately skips would keep this test returning $false for ever
+                $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notlike "*_Classes" } |
+                    Select-Object -ExpandProperty PSChildName)
+
+                foreach ($sid in $loadedSids) {
+                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                    if ($value -ne 2) { return $false }
+                }
+
+                $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            Sid  = $_.PSChildName
+                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        }
+                    } |
+                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+
+                $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
+
+                foreach ($target in $targets) {
+                    $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
+                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+
+                    $mountName = "DSCTest_$($target.Sid)"
+                    & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
+                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        if ($value -ne 2) { return $false }
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\$mountName" | Out-Null
+                    }
+                }
+
+                return $true
+            }
+
+            GetScript = {
+                $hiveFile = "$env:SystemDrive\Users\Default\NTUSER.DAT"
+                $result = "Unknown"
+
+                & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    try {
+                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
+                        $result = "Default profile VisualFXSetting = $value"
+                    }
+                    finally {
+                        [GC]::Collect()
+                        [GC]::WaitForPendingFinalizers()
+                        & reg.exe unload "HKU\DSCGet_DefaultUser" | Out-Null
+                    }
+                }
+
+                return @{ Result = $result }
             }
         }
 
