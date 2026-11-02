@@ -1,7 +1,7 @@
 ################################################################
 # Script to configure Windows lab environment using DSC        #
 # Author: Chris Langford                                       #
-# Version: 7.0.0                                               #
+# Version: 7.0.1                                               #
 ################################################################
 
 Configuration xBaICTSupC1LabCfg {
@@ -128,24 +128,26 @@ Configuration xBaICTSupC1LabCfg {
             SetScript = {
                 $ErrorActionPreference = "Stop"
 
-                # The values Windows writes itself when "Adjust for best performance" is picked
-                $dwordValues = @{
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
-                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
-                }
-
-                $stringValues = @{
-                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
-                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
-                }
-
-                $binaryValues = @{
-                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
-                }
-
                 function Set-VisualEffects {
                     param ([string] $HiveRoot)
+
+                    # The values Windows writes itself when "Adjust for best performance"
+                    # is picked. Declared in here so the function does not rely on
+                    # variables in the caller's scope.
+                    $dwordValues = @{
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                        "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                    }
+
+                    $stringValues = @{
+                        "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                        "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                    }
+
+                    $binaryValues = @{
+                        "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                    }
 
                     foreach ($set in @(
                         @{ Values = $dwordValues;  Type = "DWord"  },
@@ -176,21 +178,28 @@ Configuration xBaICTSupC1LabCfg {
                     Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
                 }
 
-                # Profiles on disk whose hive is not loaded, plus the Default profile
+                # Profiles on disk whose hive is not loaded, plus the Default profile.
+                # The value under ProfileList is ProfileImagePath, not ProfilePath. The
+                # SID filter runs before it is read, so entries that do not carry it are
+                # never touched, and GetValue is used in place of property access: DSC
+                # runs these script blocks under Set-StrictMode, where reading a property
+                # that does not exist is a terminating error rather than $null.
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSC_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
@@ -208,8 +217,19 @@ Configuration xBaICTSupC1LabCfg {
             }
 
             TestScript = {
-                # In desired state when VisualFXSetting is 2 in every loaded hive and in
-                # every profile on disk, including the Default profile
+                # In desired state when VisualFXSetting is 2 for every real user hive and
+                # every profile on disk, including the Default profile. Values are read
+                # with GetValue rather than Get-ItemProperty because DSC runs these script
+                # blocks under Set-StrictMode, where reading a property that does not
+                # exist is a terminating error that -ErrorAction cannot suppress.
+                function Get-VisualFXSetting {
+                    param ([string] $HiveRoot)
+
+                    $key = Get-Item -Path "$HiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                    if ($null -eq $key) { return $null }
+                    return $key.GetValue("VisualFXSetting")
+                }
+
                 # Must use the same SID filter as SetScript, or the hives SetScript
                 # deliberately skips would keep this test returning $false for ever
                 $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
@@ -217,32 +237,36 @@ Configuration xBaICTSupC1LabCfg {
                     Select-Object -ExpandProperty PSChildName)
 
                 foreach ($sid in $loadedSids) {
-                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                    if ($value -ne 2) { return $false }
+                    if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$sid") -ne 2) { return $false }
                 }
 
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSCTest_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
-                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    # A hive that cannot be mounted is skipped rather than reported as
+                    # non-compliant: SetScript skips it too, so returning $false here
+                    # would put the LCM into a Set on every consistency check for ever
+                    if ($LASTEXITCODE -ne 0) { continue }
 
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        if ($value -ne 2) { return $false }
+                        if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$mountName") -ne 2) { return $false }
                     }
                     finally {
                         [GC]::Collect()
@@ -261,8 +285,13 @@ Configuration xBaICTSupC1LabCfg {
                 & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
                 if ($LASTEXITCODE -eq 0) {
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        $result = "Default profile VisualFXSetting = $value"
+                        $key = Get-Item -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                        if ($null -eq $key) {
+                            $result = "Default profile VisualFXSetting is not set"
+                        }
+                        else {
+                            $result = "Default profile VisualFXSetting = $($key.GetValue('VisualFXSetting'))"
+                        }
                     }
                     finally {
                         [GC]::Collect()
@@ -415,24 +444,26 @@ Configuration xBaICTSupC2LabCfg {
             SetScript = {
                 $ErrorActionPreference = "Stop"
 
-                # The values Windows writes itself when "Adjust for best performance" is picked
-                $dwordValues = @{
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
-                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
-                }
-
-                $stringValues = @{
-                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
-                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
-                }
-
-                $binaryValues = @{
-                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
-                }
-
                 function Set-VisualEffects {
                     param ([string] $HiveRoot)
+
+                    # The values Windows writes itself when "Adjust for best performance"
+                    # is picked. Declared in here so the function does not rely on
+                    # variables in the caller's scope.
+                    $dwordValues = @{
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                        "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                    }
+
+                    $stringValues = @{
+                        "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                        "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                    }
+
+                    $binaryValues = @{
+                        "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                    }
 
                     foreach ($set in @(
                         @{ Values = $dwordValues;  Type = "DWord"  },
@@ -463,21 +494,28 @@ Configuration xBaICTSupC2LabCfg {
                     Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
                 }
 
-                # Profiles on disk whose hive is not loaded, plus the Default profile
+                # Profiles on disk whose hive is not loaded, plus the Default profile.
+                # The value under ProfileList is ProfileImagePath, not ProfilePath. The
+                # SID filter runs before it is read, so entries that do not carry it are
+                # never touched, and GetValue is used in place of property access: DSC
+                # runs these script blocks under Set-StrictMode, where reading a property
+                # that does not exist is a terminating error rather than $null.
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSC_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
@@ -495,8 +533,19 @@ Configuration xBaICTSupC2LabCfg {
             }
 
             TestScript = {
-                # In desired state when VisualFXSetting is 2 in every loaded hive and in
-                # every profile on disk, including the Default profile
+                # In desired state when VisualFXSetting is 2 for every real user hive and
+                # every profile on disk, including the Default profile. Values are read
+                # with GetValue rather than Get-ItemProperty because DSC runs these script
+                # blocks under Set-StrictMode, where reading a property that does not
+                # exist is a terminating error that -ErrorAction cannot suppress.
+                function Get-VisualFXSetting {
+                    param ([string] $HiveRoot)
+
+                    $key = Get-Item -Path "$HiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                    if ($null -eq $key) { return $null }
+                    return $key.GetValue("VisualFXSetting")
+                }
+
                 # Must use the same SID filter as SetScript, or the hives SetScript
                 # deliberately skips would keep this test returning $false for ever
                 $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
@@ -504,32 +553,36 @@ Configuration xBaICTSupC2LabCfg {
                     Select-Object -ExpandProperty PSChildName)
 
                 foreach ($sid in $loadedSids) {
-                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                    if ($value -ne 2) { return $false }
+                    if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$sid") -ne 2) { return $false }
                 }
 
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSCTest_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
-                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    # A hive that cannot be mounted is skipped rather than reported as
+                    # non-compliant: SetScript skips it too, so returning $false here
+                    # would put the LCM into a Set on every consistency check for ever
+                    if ($LASTEXITCODE -ne 0) { continue }
 
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        if ($value -ne 2) { return $false }
+                        if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$mountName") -ne 2) { return $false }
                     }
                     finally {
                         [GC]::Collect()
@@ -548,8 +601,13 @@ Configuration xBaICTSupC2LabCfg {
                 & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
                 if ($LASTEXITCODE -eq 0) {
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        $result = "Default profile VisualFXSetting = $value"
+                        $key = Get-Item -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                        if ($null -eq $key) {
+                            $result = "Default profile VisualFXSetting is not set"
+                        }
+                        else {
+                            $result = "Default profile VisualFXSetting = $($key.GetValue('VisualFXSetting'))"
+                        }
                     }
                     finally {
                         [GC]::Collect()
@@ -717,24 +775,26 @@ Configuration xBaICTSupC3LabCfg {
             SetScript = {
                 $ErrorActionPreference = "Stop"
 
-                # The values Windows writes itself when "Adjust for best performance" is picked
-                $dwordValues = @{
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
-                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
-                }
-
-                $stringValues = @{
-                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
-                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
-                }
-
-                $binaryValues = @{
-                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
-                }
-
                 function Set-VisualEffects {
                     param ([string] $HiveRoot)
+
+                    # The values Windows writes itself when "Adjust for best performance"
+                    # is picked. Declared in here so the function does not rely on
+                    # variables in the caller's scope.
+                    $dwordValues = @{
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                        "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                    }
+
+                    $stringValues = @{
+                        "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                        "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                    }
+
+                    $binaryValues = @{
+                        "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                    }
 
                     foreach ($set in @(
                         @{ Values = $dwordValues;  Type = "DWord"  },
@@ -765,21 +825,28 @@ Configuration xBaICTSupC3LabCfg {
                     Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
                 }
 
-                # Profiles on disk whose hive is not loaded, plus the Default profile
+                # Profiles on disk whose hive is not loaded, plus the Default profile.
+                # The value under ProfileList is ProfileImagePath, not ProfilePath. The
+                # SID filter runs before it is read, so entries that do not carry it are
+                # never touched, and GetValue is used in place of property access: DSC
+                # runs these script blocks under Set-StrictMode, where reading a property
+                # that does not exist is a terminating error rather than $null.
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSC_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
@@ -797,8 +864,19 @@ Configuration xBaICTSupC3LabCfg {
             }
 
             TestScript = {
-                # In desired state when VisualFXSetting is 2 in every loaded hive and in
-                # every profile on disk, including the Default profile
+                # In desired state when VisualFXSetting is 2 for every real user hive and
+                # every profile on disk, including the Default profile. Values are read
+                # with GetValue rather than Get-ItemProperty because DSC runs these script
+                # blocks under Set-StrictMode, where reading a property that does not
+                # exist is a terminating error that -ErrorAction cannot suppress.
+                function Get-VisualFXSetting {
+                    param ([string] $HiveRoot)
+
+                    $key = Get-Item -Path "$HiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                    if ($null -eq $key) { return $null }
+                    return $key.GetValue("VisualFXSetting")
+                }
+
                 # Must use the same SID filter as SetScript, or the hives SetScript
                 # deliberately skips would keep this test returning $false for ever
                 $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
@@ -806,32 +884,36 @@ Configuration xBaICTSupC3LabCfg {
                     Select-Object -ExpandProperty PSChildName)
 
                 foreach ($sid in $loadedSids) {
-                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                    if ($value -ne 2) { return $false }
+                    if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$sid") -ne 2) { return $false }
                 }
 
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSCTest_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
-                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    # A hive that cannot be mounted is skipped rather than reported as
+                    # non-compliant: SetScript skips it too, so returning $false here
+                    # would put the LCM into a Set on every consistency check for ever
+                    if ($LASTEXITCODE -ne 0) { continue }
 
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        if ($value -ne 2) { return $false }
+                        if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$mountName") -ne 2) { return $false }
                     }
                     finally {
                         [GC]::Collect()
@@ -850,8 +932,13 @@ Configuration xBaICTSupC3LabCfg {
                 & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
                 if ($LASTEXITCODE -eq 0) {
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        $result = "Default profile VisualFXSetting = $value"
+                        $key = Get-Item -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                        if ($null -eq $key) {
+                            $result = "Default profile VisualFXSetting is not set"
+                        }
+                        else {
+                            $result = "Default profile VisualFXSetting = $($key.GetValue('VisualFXSetting'))"
+                        }
                     }
                     finally {
                         [GC]::Collect()
@@ -1017,24 +1104,26 @@ Configuration xBaICTSupC4LabCfg {
             SetScript = {
                 $ErrorActionPreference = "Stop"
 
-                # The values Windows writes itself when "Adjust for best performance" is picked
-                $dwordValues = @{
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
-                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
-                }
-
-                $stringValues = @{
-                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
-                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
-                }
-
-                $binaryValues = @{
-                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
-                }
-
                 function Set-VisualEffects {
                     param ([string] $HiveRoot)
+
+                    # The values Windows writes itself when "Adjust for best performance"
+                    # is picked. Declared in here so the function does not rely on
+                    # variables in the caller's scope.
+                    $dwordValues = @{
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                        "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                    }
+
+                    $stringValues = @{
+                        "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                        "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                    }
+
+                    $binaryValues = @{
+                        "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                    }
 
                     foreach ($set in @(
                         @{ Values = $dwordValues;  Type = "DWord"  },
@@ -1065,21 +1154,28 @@ Configuration xBaICTSupC4LabCfg {
                     Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
                 }
 
-                # Profiles on disk whose hive is not loaded, plus the Default profile
+                # Profiles on disk whose hive is not loaded, plus the Default profile.
+                # The value under ProfileList is ProfileImagePath, not ProfilePath. The
+                # SID filter runs before it is read, so entries that do not carry it are
+                # never touched, and GetValue is used in place of property access: DSC
+                # runs these script blocks under Set-StrictMode, where reading a property
+                # that does not exist is a terminating error rather than $null.
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSC_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
@@ -1097,8 +1193,19 @@ Configuration xBaICTSupC4LabCfg {
             }
 
             TestScript = {
-                # In desired state when VisualFXSetting is 2 in every loaded hive and in
-                # every profile on disk, including the Default profile
+                # In desired state when VisualFXSetting is 2 for every real user hive and
+                # every profile on disk, including the Default profile. Values are read
+                # with GetValue rather than Get-ItemProperty because DSC runs these script
+                # blocks under Set-StrictMode, where reading a property that does not
+                # exist is a terminating error that -ErrorAction cannot suppress.
+                function Get-VisualFXSetting {
+                    param ([string] $HiveRoot)
+
+                    $key = Get-Item -Path "$HiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                    if ($null -eq $key) { return $null }
+                    return $key.GetValue("VisualFXSetting")
+                }
+
                 # Must use the same SID filter as SetScript, or the hives SetScript
                 # deliberately skips would keep this test returning $false for ever
                 $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
@@ -1106,32 +1213,36 @@ Configuration xBaICTSupC4LabCfg {
                     Select-Object -ExpandProperty PSChildName)
 
                 foreach ($sid in $loadedSids) {
-                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                    if ($value -ne 2) { return $false }
+                    if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$sid") -ne 2) { return $false }
                 }
 
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSCTest_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
-                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    # A hive that cannot be mounted is skipped rather than reported as
+                    # non-compliant: SetScript skips it too, so returning $false here
+                    # would put the LCM into a Set on every consistency check for ever
+                    if ($LASTEXITCODE -ne 0) { continue }
 
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        if ($value -ne 2) { return $false }
+                        if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$mountName") -ne 2) { return $false }
                     }
                     finally {
                         [GC]::Collect()
@@ -1150,8 +1261,13 @@ Configuration xBaICTSupC4LabCfg {
                 & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
                 if ($LASTEXITCODE -eq 0) {
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        $result = "Default profile VisualFXSetting = $value"
+                        $key = Get-Item -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                        if ($null -eq $key) {
+                            $result = "Default profile VisualFXSetting is not set"
+                        }
+                        else {
+                            $result = "Default profile VisualFXSetting = $($key.GetValue('VisualFXSetting'))"
+                        }
                     }
                     finally {
                         [GC]::Collect()
@@ -1317,24 +1433,26 @@ Configuration xBaICTSupC6LabCfg {
             SetScript = {
                 $ErrorActionPreference = "Stop"
 
-                # The values Windows writes itself when "Adjust for best performance" is picked
-                $dwordValues = @{
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
-                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
-                }
-
-                $stringValues = @{
-                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
-                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
-                }
-
-                $binaryValues = @{
-                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
-                }
-
                 function Set-VisualEffects {
                     param ([string] $HiveRoot)
+
+                    # The values Windows writes itself when "Adjust for best performance"
+                    # is picked. Declared in here so the function does not rely on
+                    # variables in the caller's scope.
+                    $dwordValues = @{
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                        "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                    }
+
+                    $stringValues = @{
+                        "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                        "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                    }
+
+                    $binaryValues = @{
+                        "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                    }
 
                     foreach ($set in @(
                         @{ Values = $dwordValues;  Type = "DWord"  },
@@ -1365,21 +1483,28 @@ Configuration xBaICTSupC6LabCfg {
                     Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
                 }
 
-                # Profiles on disk whose hive is not loaded, plus the Default profile
+                # Profiles on disk whose hive is not loaded, plus the Default profile.
+                # The value under ProfileList is ProfileImagePath, not ProfilePath. The
+                # SID filter runs before it is read, so entries that do not carry it are
+                # never touched, and GetValue is used in place of property access: DSC
+                # runs these script blocks under Set-StrictMode, where reading a property
+                # that does not exist is a terminating error rather than $null.
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSC_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
@@ -1397,8 +1522,19 @@ Configuration xBaICTSupC6LabCfg {
             }
 
             TestScript = {
-                # In desired state when VisualFXSetting is 2 in every loaded hive and in
-                # every profile on disk, including the Default profile
+                # In desired state when VisualFXSetting is 2 for every real user hive and
+                # every profile on disk, including the Default profile. Values are read
+                # with GetValue rather than Get-ItemProperty because DSC runs these script
+                # blocks under Set-StrictMode, where reading a property that does not
+                # exist is a terminating error that -ErrorAction cannot suppress.
+                function Get-VisualFXSetting {
+                    param ([string] $HiveRoot)
+
+                    $key = Get-Item -Path "$HiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                    if ($null -eq $key) { return $null }
+                    return $key.GetValue("VisualFXSetting")
+                }
+
                 # Must use the same SID filter as SetScript, or the hives SetScript
                 # deliberately skips would keep this test returning $false for ever
                 $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
@@ -1406,32 +1542,36 @@ Configuration xBaICTSupC6LabCfg {
                     Select-Object -ExpandProperty PSChildName)
 
                 foreach ($sid in $loadedSids) {
-                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                    if ($value -ne 2) { return $false }
+                    if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$sid") -ne 2) { return $false }
                 }
 
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSCTest_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
-                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    # A hive that cannot be mounted is skipped rather than reported as
+                    # non-compliant: SetScript skips it too, so returning $false here
+                    # would put the LCM into a Set on every consistency check for ever
+                    if ($LASTEXITCODE -ne 0) { continue }
 
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        if ($value -ne 2) { return $false }
+                        if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$mountName") -ne 2) { return $false }
                     }
                     finally {
                         [GC]::Collect()
@@ -1450,8 +1590,13 @@ Configuration xBaICTSupC6LabCfg {
                 & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
                 if ($LASTEXITCODE -eq 0) {
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        $result = "Default profile VisualFXSetting = $value"
+                        $key = Get-Item -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                        if ($null -eq $key) {
+                            $result = "Default profile VisualFXSetting is not set"
+                        }
+                        else {
+                            $result = "Default profile VisualFXSetting = $($key.GetValue('VisualFXSetting'))"
+                        }
                     }
                     finally {
                         [GC]::Collect()
@@ -1553,24 +1698,26 @@ Configuration xBaICTNetEPALabCfg {
             SetScript = {
                 $ErrorActionPreference = "Stop"
 
-                # The values Windows writes itself when "Adjust for best performance" is picked
-                $dwordValues = @{
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
-                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
-                }
-
-                $stringValues = @{
-                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
-                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
-                }
-
-                $binaryValues = @{
-                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
-                }
-
                 function Set-VisualEffects {
                     param ([string] $HiveRoot)
+
+                    # The values Windows writes itself when "Adjust for best performance"
+                    # is picked. Declared in here so the function does not rely on
+                    # variables in the caller's scope.
+                    $dwordValues = @{
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                        "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                    }
+
+                    $stringValues = @{
+                        "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                        "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                    }
+
+                    $binaryValues = @{
+                        "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                    }
 
                     foreach ($set in @(
                         @{ Values = $dwordValues;  Type = "DWord"  },
@@ -1601,21 +1748,28 @@ Configuration xBaICTNetEPALabCfg {
                     Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
                 }
 
-                # Profiles on disk whose hive is not loaded, plus the Default profile
+                # Profiles on disk whose hive is not loaded, plus the Default profile.
+                # The value under ProfileList is ProfileImagePath, not ProfilePath. The
+                # SID filter runs before it is read, so entries that do not carry it are
+                # never touched, and GetValue is used in place of property access: DSC
+                # runs these script blocks under Set-StrictMode, where reading a property
+                # that does not exist is a terminating error rather than $null.
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSC_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
@@ -1633,8 +1787,19 @@ Configuration xBaICTNetEPALabCfg {
             }
 
             TestScript = {
-                # In desired state when VisualFXSetting is 2 in every loaded hive and in
-                # every profile on disk, including the Default profile
+                # In desired state when VisualFXSetting is 2 for every real user hive and
+                # every profile on disk, including the Default profile. Values are read
+                # with GetValue rather than Get-ItemProperty because DSC runs these script
+                # blocks under Set-StrictMode, where reading a property that does not
+                # exist is a terminating error that -ErrorAction cannot suppress.
+                function Get-VisualFXSetting {
+                    param ([string] $HiveRoot)
+
+                    $key = Get-Item -Path "$HiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                    if ($null -eq $key) { return $null }
+                    return $key.GetValue("VisualFXSetting")
+                }
+
                 # Must use the same SID filter as SetScript, or the hives SetScript
                 # deliberately skips would keep this test returning $false for ever
                 $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
@@ -1642,32 +1807,36 @@ Configuration xBaICTNetEPALabCfg {
                     Select-Object -ExpandProperty PSChildName)
 
                 foreach ($sid in $loadedSids) {
-                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                    if ($value -ne 2) { return $false }
+                    if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$sid") -ne 2) { return $false }
                 }
 
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSCTest_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
-                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    # A hive that cannot be mounted is skipped rather than reported as
+                    # non-compliant: SetScript skips it too, so returning $false here
+                    # would put the LCM into a Set on every consistency check for ever
+                    if ($LASTEXITCODE -ne 0) { continue }
 
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        if ($value -ne 2) { return $false }
+                        if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$mountName") -ne 2) { return $false }
                     }
                     finally {
                         [GC]::Collect()
@@ -1686,8 +1855,13 @@ Configuration xBaICTNetEPALabCfg {
                 & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
                 if ($LASTEXITCODE -eq 0) {
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        $result = "Default profile VisualFXSetting = $value"
+                        $key = Get-Item -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                        if ($null -eq $key) {
+                            $result = "Default profile VisualFXSetting is not set"
+                        }
+                        else {
+                            $result = "Default profile VisualFXSetting = $($key.GetValue('VisualFXSetting'))"
+                        }
                     }
                     finally {
                         [GC]::Collect()
@@ -1853,24 +2027,26 @@ Configuration xBaICTSupMstrLabCfg {
             SetScript = {
                 $ErrorActionPreference = "Stop"
 
-                # The values Windows writes itself when "Adjust for best performance" is picked
-                $dwordValues = @{
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
-                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
-                }
-
-                $stringValues = @{
-                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
-                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
-                }
-
-                $binaryValues = @{
-                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
-                }
-
                 function Set-VisualEffects {
                     param ([string] $HiveRoot)
+
+                    # The values Windows writes itself when "Adjust for best performance"
+                    # is picked. Declared in here so the function does not rely on
+                    # variables in the caller's scope.
+                    $dwordValues = @{
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                        "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                    }
+
+                    $stringValues = @{
+                        "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                        "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                    }
+
+                    $binaryValues = @{
+                        "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                    }
 
                     foreach ($set in @(
                         @{ Values = $dwordValues;  Type = "DWord"  },
@@ -1901,21 +2077,28 @@ Configuration xBaICTSupMstrLabCfg {
                     Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
                 }
 
-                # Profiles on disk whose hive is not loaded, plus the Default profile
+                # Profiles on disk whose hive is not loaded, plus the Default profile.
+                # The value under ProfileList is ProfileImagePath, not ProfilePath. The
+                # SID filter runs before it is read, so entries that do not carry it are
+                # never touched, and GetValue is used in place of property access: DSC
+                # runs these script blocks under Set-StrictMode, where reading a property
+                # that does not exist is a terminating error rather than $null.
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSC_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
@@ -1933,8 +2116,19 @@ Configuration xBaICTSupMstrLabCfg {
             }
 
             TestScript = {
-                # In desired state when VisualFXSetting is 2 in every loaded hive and in
-                # every profile on disk, including the Default profile
+                # In desired state when VisualFXSetting is 2 for every real user hive and
+                # every profile on disk, including the Default profile. Values are read
+                # with GetValue rather than Get-ItemProperty because DSC runs these script
+                # blocks under Set-StrictMode, where reading a property that does not
+                # exist is a terminating error that -ErrorAction cannot suppress.
+                function Get-VisualFXSetting {
+                    param ([string] $HiveRoot)
+
+                    $key = Get-Item -Path "$HiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                    if ($null -eq $key) { return $null }
+                    return $key.GetValue("VisualFXSetting")
+                }
+
                 # Must use the same SID filter as SetScript, or the hives SetScript
                 # deliberately skips would keep this test returning $false for ever
                 $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
@@ -1942,32 +2136,36 @@ Configuration xBaICTSupMstrLabCfg {
                     Select-Object -ExpandProperty PSChildName)
 
                 foreach ($sid in $loadedSids) {
-                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                    if ($value -ne 2) { return $false }
+                    if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$sid") -ne 2) { return $false }
                 }
 
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSCTest_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
-                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    # A hive that cannot be mounted is skipped rather than reported as
+                    # non-compliant: SetScript skips it too, so returning $false here
+                    # would put the LCM into a Set on every consistency check for ever
+                    if ($LASTEXITCODE -ne 0) { continue }
 
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        if ($value -ne 2) { return $false }
+                        if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$mountName") -ne 2) { return $false }
                     }
                     finally {
                         [GC]::Collect()
@@ -1986,8 +2184,13 @@ Configuration xBaICTSupMstrLabCfg {
                 & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
                 if ($LASTEXITCODE -eq 0) {
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        $result = "Default profile VisualFXSetting = $value"
+                        $key = Get-Item -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                        if ($null -eq $key) {
+                            $result = "Default profile VisualFXSetting is not set"
+                        }
+                        else {
+                            $result = "Default profile VisualFXSetting = $($key.GetValue('VisualFXSetting'))"
+                        }
                     }
                     finally {
                         [GC]::Collect()
@@ -2173,24 +2376,26 @@ Configuration xBaL4NetEngC4LabCfg {
             SetScript = {
                 $ErrorActionPreference = "Stop"
 
-                # The values Windows writes itself when "Adjust for best performance" is picked
-                $dwordValues = @{
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
-                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
-                }
-
-                $stringValues = @{
-                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
-                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
-                }
-
-                $binaryValues = @{
-                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
-                }
-
                 function Set-VisualEffects {
                     param ([string] $HiveRoot)
+
+                    # The values Windows writes itself when "Adjust for best performance"
+                    # is picked. Declared in here so the function does not rely on
+                    # variables in the caller's scope.
+                    $dwordValues = @{
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                        "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                    }
+
+                    $stringValues = @{
+                        "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                        "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                    }
+
+                    $binaryValues = @{
+                        "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                    }
 
                     foreach ($set in @(
                         @{ Values = $dwordValues;  Type = "DWord"  },
@@ -2221,21 +2426,28 @@ Configuration xBaL4NetEngC4LabCfg {
                     Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
                 }
 
-                # Profiles on disk whose hive is not loaded, plus the Default profile
+                # Profiles on disk whose hive is not loaded, plus the Default profile.
+                # The value under ProfileList is ProfileImagePath, not ProfilePath. The
+                # SID filter runs before it is read, so entries that do not carry it are
+                # never touched, and GetValue is used in place of property access: DSC
+                # runs these script blocks under Set-StrictMode, where reading a property
+                # that does not exist is a terminating error rather than $null.
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSC_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
@@ -2253,8 +2465,19 @@ Configuration xBaL4NetEngC4LabCfg {
             }
 
             TestScript = {
-                # In desired state when VisualFXSetting is 2 in every loaded hive and in
-                # every profile on disk, including the Default profile
+                # In desired state when VisualFXSetting is 2 for every real user hive and
+                # every profile on disk, including the Default profile. Values are read
+                # with GetValue rather than Get-ItemProperty because DSC runs these script
+                # blocks under Set-StrictMode, where reading a property that does not
+                # exist is a terminating error that -ErrorAction cannot suppress.
+                function Get-VisualFXSetting {
+                    param ([string] $HiveRoot)
+
+                    $key = Get-Item -Path "$HiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                    if ($null -eq $key) { return $null }
+                    return $key.GetValue("VisualFXSetting")
+                }
+
                 # Must use the same SID filter as SetScript, or the hives SetScript
                 # deliberately skips would keep this test returning $false for ever
                 $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
@@ -2262,32 +2485,36 @@ Configuration xBaL4NetEngC4LabCfg {
                     Select-Object -ExpandProperty PSChildName)
 
                 foreach ($sid in $loadedSids) {
-                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                    if ($value -ne 2) { return $false }
+                    if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$sid") -ne 2) { return $false }
                 }
 
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSCTest_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
-                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    # A hive that cannot be mounted is skipped rather than reported as
+                    # non-compliant: SetScript skips it too, so returning $false here
+                    # would put the LCM into a Set on every consistency check for ever
+                    if ($LASTEXITCODE -ne 0) { continue }
 
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        if ($value -ne 2) { return $false }
+                        if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$mountName") -ne 2) { return $false }
                     }
                     finally {
                         [GC]::Collect()
@@ -2306,8 +2533,13 @@ Configuration xBaL4NetEngC4LabCfg {
                 & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
                 if ($LASTEXITCODE -eq 0) {
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        $result = "Default profile VisualFXSetting = $value"
+                        $key = Get-Item -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                        if ($null -eq $key) {
+                            $result = "Default profile VisualFXSetting is not set"
+                        }
+                        else {
+                            $result = "Default profile VisualFXSetting = $($key.GetValue('VisualFXSetting'))"
+                        }
                     }
                     finally {
                         [GC]::Collect()
@@ -2420,24 +2652,26 @@ Configuration xBaL4NetEngC5LabCfg {
             SetScript = {
                 $ErrorActionPreference = "Stop"
 
-                # The values Windows writes itself when "Adjust for best performance" is picked
-                $dwordValues = @{
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
-                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
-                }
-
-                $stringValues = @{
-                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
-                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
-                }
-
-                $binaryValues = @{
-                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
-                }
-
                 function Set-VisualEffects {
                     param ([string] $HiveRoot)
+
+                    # The values Windows writes itself when "Adjust for best performance"
+                    # is picked. Declared in here so the function does not rely on
+                    # variables in the caller's scope.
+                    $dwordValues = @{
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                        "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                    }
+
+                    $stringValues = @{
+                        "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                        "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                    }
+
+                    $binaryValues = @{
+                        "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                    }
 
                     foreach ($set in @(
                         @{ Values = $dwordValues;  Type = "DWord"  },
@@ -2468,21 +2702,28 @@ Configuration xBaL4NetEngC5LabCfg {
                     Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
                 }
 
-                # Profiles on disk whose hive is not loaded, plus the Default profile
+                # Profiles on disk whose hive is not loaded, plus the Default profile.
+                # The value under ProfileList is ProfileImagePath, not ProfilePath. The
+                # SID filter runs before it is read, so entries that do not carry it are
+                # never touched, and GetValue is used in place of property access: DSC
+                # runs these script blocks under Set-StrictMode, where reading a property
+                # that does not exist is a terminating error rather than $null.
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSC_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
@@ -2500,8 +2741,19 @@ Configuration xBaL4NetEngC5LabCfg {
             }
 
             TestScript = {
-                # In desired state when VisualFXSetting is 2 in every loaded hive and in
-                # every profile on disk, including the Default profile
+                # In desired state when VisualFXSetting is 2 for every real user hive and
+                # every profile on disk, including the Default profile. Values are read
+                # with GetValue rather than Get-ItemProperty because DSC runs these script
+                # blocks under Set-StrictMode, where reading a property that does not
+                # exist is a terminating error that -ErrorAction cannot suppress.
+                function Get-VisualFXSetting {
+                    param ([string] $HiveRoot)
+
+                    $key = Get-Item -Path "$HiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                    if ($null -eq $key) { return $null }
+                    return $key.GetValue("VisualFXSetting")
+                }
+
                 # Must use the same SID filter as SetScript, or the hives SetScript
                 # deliberately skips would keep this test returning $false for ever
                 $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
@@ -2509,32 +2761,36 @@ Configuration xBaL4NetEngC5LabCfg {
                     Select-Object -ExpandProperty PSChildName)
 
                 foreach ($sid in $loadedSids) {
-                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                    if ($value -ne 2) { return $false }
+                    if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$sid") -ne 2) { return $false }
                 }
 
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSCTest_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
-                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    # A hive that cannot be mounted is skipped rather than reported as
+                    # non-compliant: SetScript skips it too, so returning $false here
+                    # would put the LCM into a Set on every consistency check for ever
+                    if ($LASTEXITCODE -ne 0) { continue }
 
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        if ($value -ne 2) { return $false }
+                        if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$mountName") -ne 2) { return $false }
                     }
                     finally {
                         [GC]::Collect()
@@ -2553,8 +2809,13 @@ Configuration xBaL4NetEngC5LabCfg {
                 & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
                 if ($LASTEXITCODE -eq 0) {
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        $result = "Default profile VisualFXSetting = $value"
+                        $key = Get-Item -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                        if ($null -eq $key) {
+                            $result = "Default profile VisualFXSetting is not set"
+                        }
+                        else {
+                            $result = "Default profile VisualFXSetting = $($key.GetValue('VisualFXSetting'))"
+                        }
                     }
                     finally {
                         [GC]::Collect()
@@ -2667,24 +2928,26 @@ Configuration xBaL4NetEngC7LabCfg {
             SetScript = {
                 $ErrorActionPreference = "Stop"
 
-                # The values Windows writes itself when "Adjust for best performance" is picked
-                $dwordValues = @{
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
-                    "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
-                    "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
-                }
-
-                $stringValues = @{
-                    "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
-                    "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
-                }
-
-                $binaryValues = @{
-                    "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
-                }
-
                 function Set-VisualEffects {
                     param ([string] $HiveRoot)
+
+                    # The values Windows writes itself when "Adjust for best performance"
+                    # is picked. Declared in here so the function does not rely on
+                    # variables in the caller's scope.
+                    $dwordValues = @{
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" = @{ VisualFXSetting = 2 }
+                        "Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"      = @{ ListviewAlphaSelect = 0; ListviewShadow = 0; TaskbarAnimations = 0; IconsOnly = 1 }
+                        "Software\Microsoft\Windows\DWM"                                   = @{ EnableAeroPeek = 0; AlwaysHibernateThumbnails = 0 }
+                    }
+
+                    $stringValues = @{
+                        "Control Panel\Desktop"               = @{ DragFullWindows = "0"; FontSmoothing = "0" }
+                        "Control Panel\Desktop\WindowMetrics" = @{ MinAnimate = "0" }
+                    }
+
+                    $binaryValues = @{
+                        "Control Panel\Desktop" = @{ UserPreferencesMask = [byte[]](0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00) }
+                    }
 
                     foreach ($set in @(
                         @{ Values = $dwordValues;  Type = "DWord"  },
@@ -2715,21 +2978,28 @@ Configuration xBaL4NetEngC7LabCfg {
                     Set-VisualEffects -HiveRoot "Registry::HKEY_USERS\$sid"
                 }
 
-                # Profiles on disk whose hive is not loaded, plus the Default profile
+                # Profiles on disk whose hive is not loaded, plus the Default profile.
+                # The value under ProfileList is ProfileImagePath, not ProfilePath. The
+                # SID filter runs before it is read, so entries that do not carry it are
+                # never touched, and GetValue is used in place of property access: DSC
+                # runs these script blocks under Set-StrictMode, where reading a property
+                # that does not exist is a terminating error rather than $null.
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSC_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
@@ -2747,8 +3017,19 @@ Configuration xBaL4NetEngC7LabCfg {
             }
 
             TestScript = {
-                # In desired state when VisualFXSetting is 2 in every loaded hive and in
-                # every profile on disk, including the Default profile
+                # In desired state when VisualFXSetting is 2 for every real user hive and
+                # every profile on disk, including the Default profile. Values are read
+                # with GetValue rather than Get-ItemProperty because DSC runs these script
+                # blocks under Set-StrictMode, where reading a property that does not
+                # exist is a terminating error that -ErrorAction cannot suppress.
+                function Get-VisualFXSetting {
+                    param ([string] $HiveRoot)
+
+                    $key = Get-Item -Path "$HiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                    if ($null -eq $key) { return $null }
+                    return $key.GetValue("VisualFXSetting")
+                }
+
                 # Must use the same SID filter as SetScript, or the hives SetScript
                 # deliberately skips would keep this test returning $false for ever
                 $loadedSids = @(Get-ChildItem -Path "Registry::HKEY_USERS" -ErrorAction SilentlyContinue |
@@ -2756,32 +3037,36 @@ Configuration xBaL4NetEngC7LabCfg {
                     Select-Object -ExpandProperty PSChildName)
 
                 foreach ($sid in $loadedSids) {
-                    $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                    if ($value -ne 2) { return $false }
+                    if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$sid") -ne 2) { return $false }
                 }
 
                 $targets = @(Get-ChildItem -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PSChildName -like "S-1-5-21-*" -and $_.PSChildName -notin $loadedSids } |
                     ForEach-Object {
-                        [pscustomobject]@{
-                            Sid  = $_.PSChildName
-                            Path = (Get-ItemProperty -Path $_.PSPath -Name "ProfilePath" -ErrorAction SilentlyContinue).ProfilePath
+                        $profilePath = $_.GetValue("ProfileImagePath")
+                        if ($profilePath) {
+                            [pscustomobject]@{ Sid = $_.PSChildName; Path = $profilePath }
                         }
-                    } |
-                    Where-Object { $_.Sid -like "S-1-5-21-*" -and $_.Sid -notin $loadedSids -and $_.Path })
+                    })
 
                 $targets += [pscustomobject]@{ Sid = "DefaultUser"; Path = "$env:SystemDrive\Users\Default" }
 
                 foreach ($target in $targets) {
                     $hiveFile = Join-Path -Path $target.Path -ChildPath "NTUSER.DAT"
-                    if (-not (Test-Path -LiteralPath $hiveFile)) { continue }
+                    # SilentlyContinue because an unreachable or orphaned profile path
+                    # raises access denied, which would be terminating under Stop
+                    if (-not (Test-Path -LiteralPath $hiveFile -ErrorAction SilentlyContinue)) { continue }
 
                     $mountName = "DSCTest_$($target.Sid)"
                     & reg.exe load "HKU\$mountName" $hiveFile | Out-Null
-                    if ($LASTEXITCODE -ne 0) { return $false }
+
+                    # A hive that cannot be mounted is skipped rather than reported as
+                    # non-compliant: SetScript skips it too, so returning $false here
+                    # would put the LCM into a Set on every consistency check for ever
+                    if ($LASTEXITCODE -ne 0) { continue }
 
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\$mountName\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        if ($value -ne 2) { return $false }
+                        if ((Get-VisualFXSetting -HiveRoot "Registry::HKEY_USERS\$mountName") -ne 2) { return $false }
                     }
                     finally {
                         [GC]::Collect()
@@ -2800,8 +3085,13 @@ Configuration xBaL4NetEngC7LabCfg {
                 & reg.exe load "HKU\DSCGet_DefaultUser" $hiveFile | Out-Null
                 if ($LASTEXITCODE -eq 0) {
                     try {
-                        $value = (Get-ItemProperty -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -ErrorAction SilentlyContinue).VisualFXSetting
-                        $result = "Default profile VisualFXSetting = $value"
+                        $key = Get-Item -Path "Registry::HKEY_USERS\DSCGet_DefaultUser\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -ErrorAction SilentlyContinue
+                        if ($null -eq $key) {
+                            $result = "Default profile VisualFXSetting is not set"
+                        }
+                        else {
+                            $result = "Default profile VisualFXSetting = $($key.GetValue('VisualFXSetting'))"
+                        }
                     }
                     finally {
                         [GC]::Collect()
