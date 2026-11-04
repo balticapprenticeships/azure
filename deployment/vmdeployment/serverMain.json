@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.2.0",
+    "contentVersion": "4.0.2.1",
     "parameters": {
         "location": {
             "type": "string",
@@ -353,7 +353,7 @@
                 "rwSuffix": "Digital"
             }
         },
-        "patchMode": "[if(equals(parameters('osPlatform'), 'Windows'), 'AutomaticByOS', 'ImageDefault')]",
+        "patchMode": "[if(equals(parameters('osPlatform'), 'Windows'), 'Manual', 'ImageDefault')]",
         "licenseType": "AzureLicense",
         "courseImageValue": {
             "l3IctSupTech": {
