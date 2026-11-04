@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 # Windows Server User Interface
 
+## [4.1.3.0] 4.11.2026
+[uiSvrDefinition]
+### Change
+  added rdpPublish tag section (testing only)
+  Updated contentVersion to 4.1.3.0
+
+## [4.0.2.0] 4.11.2026
+[serverMain]
+### SS
+  Added rdpPublish tag
+  Updated contentVersion for windowsServer module to 4.0.2.0
+
 ## [4.0.0.1] 5.2.2026
 [uiSvrDefinition]
 ### Change
@@ -71,6 +83,13 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
   Updated contentVersion to 4.0.1.0  
 
 # Modules
+
+## [4.0.2.0] 4.11.2026
+[windowsServer]
+### Add
+  Add the rdpPublish tag (testing only)
+  Set enableAutomaticUpdates to false
+  Updated to 4.0.2.0
 
 ## [4.1.0.0] 13.10.2026
 [windowsDesktop]
