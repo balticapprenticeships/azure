@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.1.2",
+    "contentVersion": "4.0.2.0",
     "parameters": {
         "location": {
             "type": "string",
@@ -301,6 +301,17 @@
                 "description": "Should the virtual machines be shutdown if idle for 15 minutes?"
             }
         },
+        "rdpPublish": {
+            "type": "string",
+            "defaultValue": "No",
+            "allowedValues": [
+                "Yes",
+                "No"
+            ],
+            "metadata": {
+                "description": "Should the virtual machines be published to the RDP gateway?"
+            }
+        },
         "resourceGroupCleanup": {
             "type": "string",
             "defaultValue": "Enabled",
@@ -527,7 +538,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(variables('_artifactsLocation'), variables('_moduleRepo'), '/windowsServer.json')]",
-                    "contentVersion": "4.0.1.1"
+                    "contentVersion": "4.0.2.0"
                 },
                 "parameters": {
                     "location": {
@@ -638,6 +649,9 @@
                     },
                     "startupSchedule": {
                         "value": "[parameters('startupSchedule')]"
+                    },
+                    "rdpPublish": {
+                        "value": "[parameters('rdpPublish')]"
                     },
                     "resourceGroupCleanup": {
                         "value": "[parameters('resourceGroupCleanup')]"
