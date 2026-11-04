@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "4.0.1.1",
+    "contentVersion": "4.0.2.0",
     "parameters": {
         "location": {
             "type": "string"
@@ -86,6 +86,9 @@
         "startupSchedule": {
             "type": "string"
         },
+        "rdpPublish": {
+            "type": "string"
+        },
         "resourceGroupCleanup": {
             "type": "string"
         }
@@ -155,6 +158,7 @@
                 "CourseEndDay": "[parameters('courseEndDay')]",
                 "Schedule": "[if(equals(parameters('startupSchedule'), 'Yes'), 'StartDaily', 'NoSchedule')]",
                 "IdleShutdown": "[parameters('idleVm')]",
+                "RdpPublish": "[parameters('rdpPublish')]",
                 "Hiberbation": "False",
                 "Cleanup": "[parameters('resourceGroupCleanup')]"                
             },
@@ -195,7 +199,7 @@
                     "adminUsername": "[parameters('adminUsername')]",
                     "adminPassword": "[parameters('adminPassword')]",
                     "windowsConfiguration": {
-                        "enableAutomaticUpdates": true,
+                        "enableAutomaticUpdates": false,
                         "provisionVMAgent": true,
                         "timeZone": "GMT Standard Time",
                         "patchSettings": {
