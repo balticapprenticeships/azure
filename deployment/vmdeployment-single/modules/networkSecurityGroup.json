@@ -1,0 +1,98 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "type": "string",
+            "metadata": {
+                "description": "Azure region the resources are created in. Comes from the resource group on the Basics tab."
+            }
+        },
+        "createdBy": {
+            "type": "string",
+            "metadata": {
+                "description": "Coach full name, used for the CreatedBy tag on every resource."
+            }
+        },
+        "osPlatform": {
+            "type": "string",
+            "metadata": {
+                "description": "Operating system type. Only Windows is implemented - Linux is reserved: the networkSecurityGroup module opens SSH for it, but there is no Linux VM module, so selecting it produces a deployment with no virtual machines."
+            }
+        },
+        "courseStartDate": {
+            "type": "string",
+            "metadata": {
+                "description": "Course start date as dd/mm/yyyy. Becomes the CourseDate tag, prefixed with WC-."
+            }
+        },
+        "resourceGroupCleanup": {
+            "type": "string",
+            "metadata": {
+                "description": "Enabled or Disabled. Becomes the Cleanup tag that the weekly cleanup runbook reads."
+            }
+        }
+    },
+    "functions": [],
+    "variables": {
+        "networkApi": "2024-07-01",
+        "nsgName": "[concat(resourceGroup().name, '-nsg')]",
+        "allowRDP": {
+            "securityRules": [
+                {
+                    "name": "Allow-RDP",
+                    "properties": {
+                        "priority": 300,
+                        "protocol": "Tcp",
+                        "access": "Allow",
+                        "direction": "Inbound",
+                        "sourceAddressPrefix": "*",
+                        "sourcePortRange": "*",
+                        "destinationAddressPrefix": "*",
+                        "destinationPortRange": "3389"
+                    }
+                }
+            ]
+        },
+        "allowSSH": {
+            "securityRules": [
+                {
+                    "name": "Allow-SSH",
+                    "properties": {
+                        "priority": 310,
+                        "protocol": "Tcp",
+                        "access": "Allow",
+                        "direction": "Inbound",
+                        "sourceAddressPrefix": "*",
+                        "sourcePortRange": "*",
+                        "destinationAddressPrefix": "*",
+                        "destinationPortRange": "22"
+                    }
+                }
+            ]
+        }
+    },
+    "resources": [
+        {
+            "name": "[variables('nsgName')]",
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "apiVersion": "[variables('networkApi')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "DisplayName": "Network Security Group",
+                "ResourceType": "NetworkSecurityGroup",
+                "Dept": "[if(contains(resourceGroup().tags, 'Dept'), resourceGroup().tags['Dept'], 'Unknown')]",
+                "CreatedBy": "[parameters('createdBy')]",
+                "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
+                "Cleanup": "[parameters('resourceGroupCleanup')]"
+            },
+            "properties": "[if(equals(parameters('osPlatform'), 'Windows'), variables('allowRDP'), variables('allowSSH'))]"
+        }
+    ],
+    "outputs": {
+        "nsgId": {
+            "type": "string",
+            "value": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+        }
+    }
+}

@@ -1,0 +1,186 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "type": "string",
+            "metadata": {
+                "description": "Azure region the resources are created in. Comes from the resource group on the Basics tab."
+            }
+        },
+        "vmName": {
+            "type": "string",
+            "metadata": {
+                "description": "Course VM name, 3 to 10 letters and numbers. Combined with the coach initials it forms the VM name prefix."
+            }
+        },
+        "vmCount": {
+            "type": "int",
+            "metadata": {
+                "description": "Number of virtual machines to create, 1 to 20. Also the count for the NICs, public IPs and shutdown schedules."
+            }
+        },
+        "vmSize": {
+            "type": "string",
+            "metadata": {
+                "description": "Azure VM size. Also decides whether accelerated networking is enabled on the NIC."
+            }
+        },
+        "vnetNewOrExisting": {
+            "type": "string",
+            "metadata": {
+                "description": "new to create a virtual network in this resource group, existing to attach to one that is already there."
+            }
+        },
+        "pipDeleteOption": {
+            "type": "string",
+            "metadata": {
+                "description": "Whether the public IP address is deleted or detached when the network interface is deleted."
+            }
+        },
+        "existingVnet": {
+            "type": "string",
+            "metadata": {
+                "description": "Name of the existing virtual network. Empty when vnetNewOrExisting is new."
+            }
+        },
+        "subnetName": {
+            "type": "string",
+            "metadata": {
+                "description": "Subnet the network interfaces are attached to."
+            }
+        },
+        "createdBy": {
+            "type": "string",
+            "metadata": {
+                "description": "Coach full name, used for the CreatedBy tag on every resource."
+            }
+        },
+        "deliveringCoachInitials": {
+            "type": "string",
+            "metadata": {
+                "description": "Coach initials, used in resource names and the DNS label."
+            }
+        },
+        "courseStartDate": {
+            "type": "string",
+            "metadata": {
+                "description": "Course start date as dd/mm/yyyy. Becomes the CourseDate tag, prefixed with WC-."
+            }
+        },
+        "resourceGroupCleanup": {
+            "type": "string",
+            "metadata": {
+                "description": "Enabled or Disabled. Becomes the Cleanup tag that the weekly cleanup runbook reads."
+            }
+        }
+    },
+    "functions": [],
+    "variables": {
+        "networkApi": "2024-07-01",
+        "nsgName": "[concat(resourceGroup().name, '-nsg')]",
+        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachInitials')))]",
+        "vnetname": "[concat(resourceGroup().name, '-vnet')]",
+        "newVnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetname'), parameters('subnetName'))]",
+        "existingVnetId": "[resourceId('Microsoft.Network/virtualNetworks/', parameters('existingVnet'))]",
+        "existingSubnetId": "[concat(variables('existingVnetId'), '/subnets/', parameters('subnetName'))]",
+        "accelNetBySize": {
+            "Standard_B1ms": {
+                "enabled": false
+            },
+            "Standard_B2s": {
+                "enabled": false
+            },
+            "Standard_B2ms": {
+                "enabled": false
+            },
+            "Standard_B4ms": {
+                "enabled": false
+            },
+            "Standard_D2s_v3": {
+                "enabled": false
+            },
+            "Standard_D4s_v3": {
+                "enabled": true
+            },
+            "Standard_D2s_v5": {
+                "enabled": false
+            },
+            "Standard_D4s_v5": {
+                "enabled": true
+            },
+            "Standard_D2as_v5": {
+                "enabled": false
+            },
+            "Standard_D4as_v5": {
+                "enabled": true
+            },
+            "Standard_E2s_v3": {
+                "enabled": false
+            },
+            "Standard_NV4as_v4": {
+                "enabled": false
+            },
+            "Standard_NV12s_v3": {
+                "enabled": false
+            },
+            "Standard_NC4as_T4_v3": {
+                "enabled": false
+            }
+        },
+        "acceleratedNetworking": "[variables('accelNetBySize')[parameters('vmSize')].enabled]"
+    },
+    "resources": [
+        {
+            "name": "[concat(variables('vmNamePrefix'), copyIndex('nicloop', 1), '-nic')]",
+            "type": "Microsoft.Network/networkInterfaces",
+            "apiVersion": "[variables('networkApi')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "DisplayName": "[concat(variables('vmNamePrefix'), copyIndex('nicloop', 1), '-nic')]",
+                "ResourceType": "NetworkInterface",
+                "Dept": "[if(contains(resourceGroup().tags, 'Dept'), resourceGroup().tags['Dept'], 'Unknown')]",
+                "CreatedBy": "[parameters('createdBy')]",
+                "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
+                "Cleanup": "[parameters('resourceGroupCleanup')]"
+            },
+            "copy": {
+                "name": "nicLoop",
+                "count": "[parameters('vmCount')]"
+            },
+            "dependsOn": [],
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "ipConfig1",
+                        "properties": {
+                            "privateIPAllocationMethod": "Dynamic",
+                            "subnet": {
+                                "id": "[if(equals(parameters('vnetNewOrExisting'), 'new'), variables('newVnetId'), variables('existingSubnetId'))]"
+                            },
+                            "publicIPAddress": {
+                                "id": "[resourceId('Microsoft.Network/publicIPAddresses', concat(variables('vmNamePrefix'), copyIndex('nicLoop', 1), '-ip'))]",
+                                "properties": {
+                                    "deleteOption": "[parameters('pipDeleteOption')]"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "enableAcceleratedNetworking": "[variables('acceleratedNetworking')]",
+                "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+                }
+            }
+        }
+    ],
+    "outputs": {
+        "networkInterfaceId": {
+            "type": "array",
+            "copy": {
+                "count": "[parameters('vmCount')]",
+                "input": "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('vmNamePrefix'), copyIndex(1), '-nic'))]"
+            }
+        }
+    }
+}

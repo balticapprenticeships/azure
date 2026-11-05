@@ -1,0 +1,94 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "type": "string",
+            "metadata": {
+                "description": "Region the schedules are created in."
+            }
+        },
+        "vmName": {
+            "type": "string",
+            "metadata": {
+                "description": "Course VM name, used to build the schedule names."
+            }
+        },
+        "vmCount": {
+            "type": "int",
+            "metadata": {
+                "description": "Number of VMs, and therefore of shutdown schedules."
+            }
+        },
+        "deliveringCoachInitials": {
+            "type": "string",
+            "metadata": {
+                "description": "Coach initials, used in the VM name prefix."
+            }
+        },
+        "createdBy": {
+            "type": "string",
+            "metadata": {
+                "description": "Coach name, for tagging."
+            }
+        },
+        "courseStartDate": {
+            "type": "string",
+            "metadata": {
+                "description": "Course start date, for the CourseDate tag."
+            }
+        },
+        "courseEndDay": {
+            "type": "string",
+            "metadata": {
+                "description": "Day the course ends, for the CourseEndDay tag the cleanup runbook reads."
+            }
+        },
+        "resourceGroupCleanup": {
+            "type": "string",
+            "metadata": {
+                "description": "Enabled or Disabled, for the Cleanup tag."
+            }
+        }
+    },
+    "functions": [],
+    "variables": {
+        "devTestLabApi": "2018-09-15",
+        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachInitials')))]"
+    },
+    "resources": [
+        {
+            "name": "[concat('shutdown-computevm-', concat(variables('vmNamePrefix'), copyIndex('shutdownLoop', 1)))]",
+            "type": "Microsoft.DevTestLab/schedules",
+            "apiVersion": "[variables('devTestLabApi')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "Displayname": "Shutdown Schedule",
+                "Dept": "[if(contains(resourceGroup().tags, 'Dept'), resourceGroup().tags['Dept'], 'Unknown')]",
+                "CreatedBy": "[parameters('createdBy')]",
+                "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
+                "CourseEndDay": "[parameters('courseEndDay')]",
+                "Cleanup": "[parameters('resourceGroupCleanup')]"
+            },
+            "copy": {
+                "name": "shutdownLoop",
+                "count": "[parameters('vmCount')]"
+            },
+            "properties": {
+                "status": "Enabled",
+                "taskType": "ComputeVmShutdownTask",
+                "dailyRecurrence": {
+                    "time": "17:00"
+                },
+                "timeZoneId": "GMT Standard Time",
+                "targetResourceId": "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('shutdownLoop', 1)))]",
+                "notificationSettings": {
+                    "status": "Disabled",
+                    "notificationLocale": "en",
+                    "timeInMinutes": 30
+                }
+            }
+        }
+    ],
+    "outputs": {}
+}

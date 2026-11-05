@@ -1,0 +1,580 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.1.0.0",
+    "parameters": {
+        "vmPlatform": {
+            "type": "string",
+            "allowedValues": [
+                "WindowsServer",
+                "WindowsClient"
+            ],
+            "metadata": {
+                "description": "Which lab platform to build. Decides the image map, the DSC configuration, the licence type, hibernation, automatic updates, the GPU driver extensions and the platform-specific tags."
+            }
+        },
+        "hibernationEnabled": {
+            "type": "bool",
+            "defaultValue": false,
+            "metadata": {
+                "description": "Enable hibernation on the virtual machines. Available for both platforms. Hibernation has to be set when the VM is created and is only supported on certain VM sizes and OS versions - see README.md. Defaults to false."
+            }
+        },
+        "location": {
+            "type": "string",
+            "metadata": {
+                "description": "Azure region the resources are created in. Comes from the resource group on the Basics tab."
+            }
+        },
+        "subscriptionId": {
+            "type": "string",
+            "metadata": {
+                "description": "Subscription holding the Azure Compute Gallery the course images are published to."
+            }
+        },
+        "vmName": {
+            "type": "string",
+            "metadata": {
+                "description": "Course VM name, 3 to 10 letters and numbers. Combined with the coach initials it forms the VM name prefix."
+            }
+        },
+        "vmSize": {
+            "type": "string",
+            "metadata": {
+                "description": "Azure VM size. Also decides whether accelerated networking is enabled on the NIC."
+            }
+        },
+        "vmCount": {
+            "type": "int",
+            "metadata": {
+                "description": "Number of virtual machines to create, 1 to 20. Also the count for the NICs, public IPs and shutdown schedules."
+            }
+        },
+        "osDiskType": {
+            "type": "string",
+            "metadata": {
+                "description": "Managed disk type for the OS disk, for example Premium_LRS."
+            }
+        },
+        "osDiskDeleteOption": {
+            "type": "string",
+            "metadata": {
+                "description": "Whether the OS disk is deleted or detached when the virtual machine is deleted."
+            }
+        },
+        "course": {
+            "type": "string",
+            "metadata": {
+                "description": "Resolved course image definition name in the Azure Compute Gallery."
+            }
+        },
+        "imageVersion": {
+            "type": "string",
+            "metadata": {
+                "description": "Lab image version. The available versions are constrained by the UI definition, so this parameter deliberately has no allowedValues - adding one here means every monthly image release has to be edited in two files."
+            }
+        },
+        "licenseType": {
+            "type": "string",
+            "metadata": {
+                "description": "Windows licence model. AzureHybrid applies Hybrid Use Benefit, anything else leaves it unset."
+            }
+        },
+        "enableHotpatching": {
+            "type": "bool",
+            "metadata": {
+                "description": "Whether hotpatching is requested. Only applies to patchMode AutomaticByPlatform on supported images."
+            }
+        },
+        "patchMode": {
+            "type": "string",
+            "metadata": {
+                "description": "Guest patching mode: Manual, AutomaticByOS, AutomaticByPlatform or ImageDefault."
+            }
+        },
+        "securityType": {
+            "type": "string",
+            "metadata": {
+                "description": "Standard or TrustedLaunch. Trusted Launch is currently unreachable because the vmSecurity UI section is hidden."
+            }
+        },
+        "secureBoot": {
+            "type": "bool",
+            "metadata": {
+                "description": "Enable Secure Boot. Only applied when securityType is TrustedLaunch."
+            }
+        },
+        "vTPM": {
+            "type": "bool",
+            "metadata": {
+                "description": "Enable the virtual TPM 2.0. Only applied when securityType is TrustedLaunch."
+            }
+        },
+        "guestAttestation": {
+            "type": "bool",
+            "metadata": {
+                "description": "Deploy the Guest Attestation extension. Only applied when securityType is TrustedLaunch."
+            }
+        },
+        "idleVM": {
+            "type": "string",
+            "metadata": {
+                "description": "Value for the IdleVm tag, read by the automation that shuts down unused machines."
+            }
+        },
+        "nicDeleteOption": {
+            "type": "string",
+            "metadata": {
+                "description": "Whether the network interface is deleted or detached when the virtual machine is deleted."
+            }
+        },
+        "adminUsername": {
+            "type": "string",
+            "metadata": {
+                "description": "Local administrator username, read from the routeway Key Vault."
+            }
+        },
+        "adminPassword": {
+            "type": "string",
+            "metadata": {
+                "description": "Local administrator password, read from the routeway Key Vault. Deliberately a string, not a securestring - it is handed to the DSC extension, which will not accept a securestring. See REVIEW.md P1-6."
+            }
+        },
+        "localUsername": {
+            "type": "string",
+            "metadata": {
+                "description": "Learner account username, read from the routeway Key Vault and passed to the DSC configuration."
+            }
+        },
+        "localUserPassword": {
+            "type": "string",
+            "metadata": {
+                "description": "Learner account password, read from the routeway Key Vault. Deliberately a string, not a securestring - see adminPassword."
+            }
+        },
+        "createdBy": {
+            "type": "string",
+            "metadata": {
+                "description": "Coach full name, used for the CreatedBy tag on every resource."
+            }
+        },
+        "deliveringCoachInitials": {
+            "type": "string",
+            "metadata": {
+                "description": "Coach initials, used in resource names and the DNS label."
+            }
+        },
+        "deliveringCoachEmail": {
+            "type": "string",
+            "metadata": {
+                "description": "Coach email address, used for tagging and notifications."
+            }
+        },
+        "courseStartDate": {
+            "type": "string",
+            "metadata": {
+                "description": "Course start date as dd/mm/yyyy. Becomes the CourseDate tag, prefixed with WC-."
+            }
+        },
+        "courseEndDay": {
+            "type": "string",
+            "metadata": {
+                "description": "Day of the week the course ends. Becomes the CourseEndDay tag, read by the cleanup automation."
+            }
+        },
+        "startupSchedule": {
+            "type": "string",
+            "metadata": {
+                "description": "Whether the VMs are tagged for the automated daily start. Yes or No."
+            }
+        },
+        "rdpPublish": {
+            "type": "string",
+            "metadata": {
+                "description": "Value for the RdpPublish tag. Read by other automation - it does not change the network security group, which allows RDP from any address by design. See REVIEW.md P1-7 and P3-10."
+            }
+        },
+        "resourceGroupCleanup": {
+            "type": "string",
+            "metadata": {
+                "description": "Enabled or Disabled. Becomes the Cleanup tag that the weekly cleanup runbook reads."
+            }
+        },
+        "postgresPassword": {
+            "type": "string",
+            "metadata": {
+                "description": "PostgreSQL password, read from the routeway Key Vault. Declared but not consumed by this module; it is read by other automation. See REVIEW.md P2-9."
+            }
+        }
+    },
+    "functions": [],
+    "variables": {
+        "computeApi": "2024-11-01",
+        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachInitials')))]",
+        "acgRG": "BalticImageGalleryRg",
+        "galleryImageName": "TrainingACG",
+        "WindowsLicense": "[if(equals(parameters('vmPlatform'), 'WindowsServer'), 'Windows_Server', 'Windows_Client')]",
+        "operatingSystemValues": {
+            "ICTSupC2": {
+                "galleryImageDefinitionName": "BA-ICTSupMstr-v2"
+            },
+            "ICTSupC3": {
+                "galleryImageDefinitionName": "BA-ICTSupMstr-v2"
+            },
+            "ICTSupC4": {
+                "galleryImageDefinitionName": "BA-ICTSupMstr-v2"
+            },
+            "ICTSupC6": {
+                "galleryImageDefinitionName": "BA-ICTSupMstr-v2"
+            },
+            "L4NetEngC4": {
+                "galleryImageDefinitionName": "BA-L4NetEngC4"
+            },
+            "L4NetEngC5": {
+                "galleryImageDefinitionName": "BA-L4NetEngC5"
+            },
+            "L4NetEngC7": {
+                "galleryImageDefinitionName": "BA-L4NetEngC7"
+            },
+            "ItBootcamp": {
+                "galleryImageDefinitionName": "BA-Bootcamp"
+            },
+            "DataBootCamp": {
+                "galleryImageDefinitionName": "BA-Win10-Courses"
+            },
+            "Diploma": {
+                "galleryImageDefinitionName": "BA-Win10-Courses"
+            },
+            "RawDigital": {
+                "galleryImageDefinitionName": "BA-Win10-Courses"
+            },
+            "SQLDataAnalysis": {
+                "galleryImageDefinitionName": "BA-Win10-Courses"
+            },
+            "ExamImage": {
+                "galleryImageDefinitionName": "BA-ExamImage"
+            },
+            "ExamTesting": {
+                "galleryImageDefinitionName": "BA-Testing"
+            },
+            "DataLevel3": {
+                "galleryImageDefinitionName": "BA-DataCourses"
+            },
+            "DataLevel4": {
+                "galleryImageDefinitionName": "BA-DataCourses-V2"
+            },
+            "DataLevel5": {
+                "galleryImageDefinitionName": "BA-DataCourses-V2"
+            },
+            "DataLevel4Sql": {
+                "galleryImageDefinitionName": "BA-DataCourses"
+            },
+            "SWAPC5": {
+                "galleryImageDefinitionName": "BA-SWDCourse5"
+            },
+            "SWAPC5UE5": {
+                "galleryImageDefinitionName": "BA-L4SWDCourse5"
+            }
+        },
+        "hibernationBySize": {
+            "Standard_B1ms": {
+                "supported": false
+            },
+            "Standard_B2s": {
+                "supported": false
+            },
+            "Standard_D2s_v3": {
+                "supported": false
+            },
+            "Standard_D4s_v3": {
+                "supported": false
+            },
+            "Standard_D2s_v5": {
+                "supported": true
+            },
+            "Standard_D4as_v5": {
+                "supported": true
+            },
+            "Standard_D2as_v5": {
+                "supported": true
+            },
+            "Standard_B2ms": {
+                "supported": false
+            },
+            "Standard_B4ms": {
+                "supported": false
+            },
+            "Standard_D4s_v5": {
+                "supported": true
+            },
+            "Standard_E2s_v3": {
+                "supported": false
+            },
+            "Standard_NV4as_v4": {
+                "supported": true
+            },
+            "Standard_NV12s_v3": {
+                "supported": false
+            },
+            "Standard_NC4as_T4_v3": {
+                "supported": false
+            }
+        },
+        "labConfigDscFunction": "[if(equals(parameters('vmPlatform'), 'WindowsServer'), concat('xBa', parameters('course'), 'LabCfg'), concat('Ba', parameters('course'), 'LabCfg'))]",
+        "trustedLaunch": {
+            "securityType": "[parameters('securityType')]",
+            "uefiSettings": {
+                "secureBootEnabled": "[parameters('secureBoot')]",
+                "vTpmEnabled": "[parameters('vTPM')]"
+            }
+        },
+        "_dscArtifactsLocation": "https://raw.githubusercontent.com/balticapprenticeships/azure",
+        "_dscExtensionRepo": "main/deployment/vmextensions",
+        "dscArchiveFolder": "DSC",
+        "dscArchiveFileName": "[if(equals(parameters('vmPlatform'), 'WindowsServer'), 'xBaLabWinSvrCfg.zip', 'BaLabWinDesktopCfg.zip')]",
+        "dscScriptFileName": "[if(equals(parameters('vmPlatform'), 'WindowsServer'), 'xBaLabWinSvrCfg.ps1', 'BaLabWinDesktopCfg.ps1')]",
+        "vmTags": {
+            "Displayname": "Virtual Machine",
+            "ResourceType": "VirtualMachine",
+            "Dept": "[if(contains(resourceGroup().tags, 'Dept'), resourceGroup().tags['Dept'], 'Unknown')]",
+            "CreatedBy": "[parameters('createdBy')]",
+            "CoachEmail": "[parameters('deliveringCoachEmail')]",
+            "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
+            "CourseEndDay": "[parameters('courseEndDay')]",
+            "Schedule": "[if(equals(parameters('startupSchedule'), 'Yes'), 'StartDaily', 'NoSchedule')]",
+            "IdleShutdown": "[parameters('idleVm')]",
+            "Cleanup": "[parameters('resourceGroupCleanup')]",
+            "Platform": "[if(equals(parameters('vmPlatform'), 'WindowsServer'), 'WindowsServer', 'WindowsClient')]",
+            "RdpPublish": "[parameters('rdpPublish')]",
+            "Hiberbation": "[string(parameters('hibernationEnabled'))]"
+        },
+        "commonDscTags": {
+            "DisplayName": "DSC",
+            "Dept": "[if(contains(resourceGroup().tags, 'Dept'), resourceGroup().tags['Dept'], 'Unknown')]",
+            "CreatedBy": "[parameters('createdBy')]",
+            "CourseDate": "[parameters('courseStartDate')]",
+            "CourseEndDay": "[parameters('courseEndDay')]",
+            "Cleanup": "[parameters('resourceGroupCleanup')]"
+        },
+        "serverOnlyDscTags": {
+            "ResourceType": "StateConfiguration"
+        }
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "[variables('computeApi')]",
+            "name": "[concat(variables('vmNamePrefix'), copyIndex('virtualMachineLoop', 1))]",
+            "location": "[parameters('location')]",
+            "tags": "[variables('vmTags')]",
+            "copy": {
+                "name": "virtualMachineLoop",
+                "count": "[parameters('vmCount')]"
+            },
+            "dependsOn": [],
+            "properties": {
+                "hardwareProfile": {
+                    "vmSize": "[parameters('vmSize')]"
+                },
+                "storageProfile": {
+                    "osDisk": {
+                        "name": "[concat(variables('vmNamePrefix'), copyIndex('virtualMachineLoop', 1), '-osdisk')]",
+                        "createOption": "FromImage",
+                        "managedDisk": {
+                            "storageAccountType": "[parameters('osDiskType')]"
+                        },
+                        "deleteOption": "[parameters('osDiskDeleteOption')]"
+                    },
+                    "imageReference": {
+                        "id": "[concat('/subscriptions/', parameters('subscriptionId'), '/resourceGroups/', variables('acgRG'), '/providers/Microsoft.Compute/galleries/', variables('galleryImageName'), '/images/', variables('operatingSystemValues')[parameters('course')].galleryImageDefinitionName, '/versions/', parameters('imageVersion'))]"
+                    }
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('vmNamePrefix'), copyIndex('virtualMachineLoop',1), '-nic'))]",
+                            "properties": {
+                                "deleteOption": "[parameters('nicDeleteOption')]"
+                            }
+                        }
+                    ]
+                },
+                "osProfile": {
+                    "computerName": "[concat(variables('vmNamePrefix'), copyIndex('virtualMachineLoop', 1))]",
+                    "adminUsername": "[parameters('adminUsername')]",
+                    "adminPassword": "[parameters('adminPassword')]",
+                    "windowsConfiguration": {
+                        "enableAutomaticUpdates": "[not(equals(parameters('vmPlatform'), 'WindowsServer'))]",
+                        "provisionVMAgent": true,
+                        "timeZone": "GMT Standard Time",
+                        "patchSettings": {
+                            "enableHotpatching": "[parameters('enableHotpatching')]",
+                            "patchMode": "[parameters('patchMode')]"
+                        }
+                    }
+                },
+                "securityProfile": "[if(equals(parameters('securityType'), 'TrustedLaunch'), variables('trustedLaunch'), json('null'))]",
+                "additionalCapabilities": {
+                    "hibernationEnabled": "[if(parameters('hibernationEnabled'), variables('hibernationBySize')[parameters('vmSize')].supported, false())]"
+                },
+                "licenseType": "[if(equals(parameters('licenseType'), 'AzureHybrid'), variables('WindowsLicense'), json('null'))]",
+                "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                        "enabled": true
+                    }
+                }
+            }
+        },
+        {
+            "name": "[concat(variables('vmNamePrefix'), copyIndex('dscLoop', 1), '/Microsoft.PowerShell.DSC')]",
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "apiVersion": "[variables('computeApi')]",
+            "copy": {
+                "name": "dscLoop",
+                "count": "[parameters('vmCount')]"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('dscLoop', 1)))]"
+            ],
+            "location": "[parameters('location')]",
+            "tags": "[union(variables('commonDscTags'), if(equals(parameters('vmPlatform'), 'WindowsServer'), variables('serverOnlyDscTags'), json('{}')))]",
+            "properties": {
+                "publisher": "Microsoft.PowerShell",
+                "type": "DSC",
+                "typeHandlerVersion": "2.80",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                    "wmfVersion": "latest",
+                    "configuration": {
+                        "url": "[concat(variables('_dscArtifactsLocation'), '/', variables('_dscExtensionRepo'), '/', variables('dscArchiveFolder'), '/', variables('dscArchiveFileName'))]",
+                        "script": "[variables('dscScriptFileName')]",
+                        "function": "[variables('labConfigDscFunction')]"
+                    }
+                },
+                "protectedSettings": {
+                    "configurationArguments": {
+                        "Credential": {
+                            "Username": "[parameters('localUsername')]",
+                            "Password": "[parameters('localUserPassword')]"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "name": "[concat(variables('vmNamePrefix'), copyIndex('policyLoop', 1), '/AzurePolicyforWindows')]",
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "apiVersion": "[variables('computeApi')]",
+            "copy": {
+                "name": "policyLoop",
+                "count": "[parameters('vmCount')]"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('policyLoop', 1)))]"
+            ],
+            "location": "[parameters('location')]",
+            "properties": {
+                "publisher": "Microsoft.GuestConfiguration",
+                "type": "ConfigurationforWindows",
+                "typeHandlerVersion": "1.0",
+                "autoUpgradeMinorVersion": true,
+                "enableAutomaticUpgrade": true,
+                "settings": {},
+                "protectedSettings": {}
+            }
+        },
+        {
+            "name": "[concat(variables('vmNamePrefix'), copyIndex('attestationLoop', 1), '/GuestAttestation')]",
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "apiVersion": "[variables('computeApi')]",
+            "condition": "[parameters('guestAttestation')]",
+            "copy": {
+                "name": "attestationLoop",
+                "count": "[parameters('vmCount')]"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('attestationLoop', 1)))]"
+            ],
+            "location": "[parameters('location')]",
+            "properties": {
+                "publisher": "Microsoft.Azure.Security.WindowsAttestation",
+                "type": "GuestAttestation",
+                "typeHandlerVersion": "1.0",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                    "AttestationConfig": {
+                        "MaaSettings": {
+                            "maaEndpoint": "",
+                            "maaTenantName": "GuestAttestation"
+                        },
+                        "AscSettings": {
+                            "ascReportingEndpoint": "",
+                            "ascReportingFrequency": ""
+                        },
+                        "useCustomToken": "false",
+                        "disableAlerts": "false"
+                    }
+                }
+            }
+        },
+        {
+            "name": "[concat(variables('vmNamePrefix'), copyIndex('nvidiaDriverLoop', 1), '/NvidiaGPUDriver')]",
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "apiVersion": "[variables('computeApi')]",
+            "condition": "[and(not(equals(parameters('vmPlatform'), 'WindowsServer')), equals(parameters('vmSize'), 'Standard_NC4as_T4_v3'))]",
+            "copy": {
+                "name": "nvidiaDriverLoop",
+                "count": "[parameters('vmCount')]"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('nvidiaDriverLoop', 1)))]"
+            ],
+            "location": "[parameters('location')]",
+            "properties": {
+                "publisher": "Microsoft.Compute",
+                "type": "CustomScriptExtension",
+                "typeHandlerVersion": "1.9",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                    "fileUris": [
+                        "[concat(variables('_dscArtifactsLocation'), '/', variables('_dscExtensionRepo'), '/install-nvidia-drivers.ps1')]"
+                    ]
+                },
+                "protectedSettings": {
+                    "commandToExecute": "[concat('powershell -ExecutionPolicy Unrestricted -File install-nvidia-drivers.ps1')]"
+                }
+            }
+        },
+        {
+            "name": "[concat(variables('vmNamePrefix'), copyIndex('amdDriverLoop', 1), '/AMDGpuDriver')]",
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "apiVersion": "[variables('computeApi')]",
+            "condition": "[and(not(equals(parameters('vmPlatform'), 'WindowsServer')), equals(parameters('vmSize'), 'Standard_NV4as_v4'))]",
+            "copy": {
+                "name": "amdDriverLoop",
+                "count": "[parameters('vmCount')]"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('amdDriverLoop', 1)))]"
+            ],
+            "location": "[parameters('location')]",
+            "properties": {
+                "publisher": "Microsoft.HpcCompute",
+                "type": "AmdGpuDriverWindows",
+                "typeHandlerVersion": "1.1",
+                "autoUpgradeMinorVersion": true,
+                "settings": {}
+            }
+        }
+    ],
+    "outputs": {
+        "vmId": {
+            "type": "array",
+            "copy": {
+                "count": "[parameters('vmCount')]",
+                "input": {
+                    "value": "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex(1)))]"
+                }
+            }
+        }
+    }
+}

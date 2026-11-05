@@ -1,0 +1,95 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "location": {
+            "type": "string",
+            "metadata": {
+                "description": "Azure region the resources are created in. Comes from the resource group on the Basics tab."
+            }
+        },
+        "vmName": {
+            "type": "string",
+            "metadata": {
+                "description": "Course VM name, 3 to 10 letters and numbers. Combined with the coach initials it forms the VM name prefix."
+            }
+        },
+        "vmCount": {
+            "type": "int",
+            "metadata": {
+                "description": "Number of virtual machines to create, 1 to 20. Also the count for the NICs, public IPs and shutdown schedules."
+            }
+        },
+        "createdBy": {
+            "type": "string",
+            "metadata": {
+                "description": "Coach full name, used for the CreatedBy tag on every resource."
+            }
+        },
+        "deliveringCoachInitials": {
+            "type": "string",
+            "metadata": {
+                "description": "Coach initials, used in resource names and the DNS label."
+            }
+        },
+        "courseStartDate": {
+            "type": "string",
+            "metadata": {
+                "description": "Course start date as dd/mm/yyyy. Becomes the CourseDate tag, prefixed with WC-."
+            }
+        },
+        "resourceGroupCleanup": {
+            "type": "string",
+            "metadata": {
+                "description": "Enabled or Disabled. Becomes the Cleanup tag that the weekly cleanup runbook reads."
+            }
+        }
+    },
+    "functions": [],
+    "variables": {
+        "networkApi": "2024-07-01",
+        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachinitials')))]",
+        "dnsSuffix": "[substring(uniqueString(resourceGroup().id), 0, 4)]"
+    },
+    "resources": [
+        {
+            "name": "[concat(variables('vmNamePrefix'), copyIndex('publicIpNameLoop', 1), '-ip')]",
+            "type": "Microsoft.Network/publicIPAddresses",
+            "apiVersion": "[variables('networkApi')]",
+            "location": "[parameters('location')]",
+            "tags": {
+                "DisplayName": "Public IP Address",
+                "ResourceType": "PublicIPAddress",
+                "Dept": "[if(contains(resourceGroup().tags, 'Dept'), resourceGroup().tags['Dept'], 'Unknown')]",
+                "CreatedBy": "[parameters('createdBy')]",
+                "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
+                "Cleanup": "[parameters('resourceGroupCleanup')]"
+            },
+            "copy": {
+                "name": "publicIpNameLoop",
+                "count": "[parameters('vmCount')]"
+            },
+            "properties": {
+                "publicIPAddressVersion": "IPv4",
+                "publicIPAllocationMethod": "Static",
+                "dnsSettings": {
+                    "domainNameLabel": "[toLower(concat('baltic-', variables('vmNamePrefix'), copyIndex('publicIpNameLoop', 1), '-', variables('dnsSuffix')))]"
+                }
+            },
+            "sku": {
+                "name": "Standard"
+            }
+        }
+    ],
+    "outputs": {
+        "FQDN": {
+            "type": "array",
+            "copy": {
+                "count": "[parameters('vmCount')]",
+                "input": {
+                    "value": "[reference(resourceId('Microsoft.Network/publicIpAddresses', concat(variables('vmNamePrefix'), copyIndex(1), '-ip'))).dnsSettings.fqdn]"
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,48 @@
+# Template consistency check for the VM deployment templates.
+#
+# This file is not active where it sits. Copy it to the repository root as
+#   .github/workflows/validate-vm-templates-single.yml
+# and delete this header. It is kept here so it travels with the templates it checks.
+#
+name: Validate VM templates (single)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deployment/vmdeployment-single/**'
+  pull_request:
+    paths:
+      - 'deployment/vmdeployment-single/**'
+  workflow_dispatch:
+
+jobs:
+  consistency:
+    name: Version and parameter consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run template checks
+        shell: pwsh
+        run: ./deployment/vmdeployment-single/tools/Test-Templates.ps1
+
+  # Optional second gate. The ARM Template Test Toolkit catches a wider class of problems
+  # (empty descriptions, outdated apiVersions, unused parameters) but is noisier, so it is
+  # set to report rather than fail until the existing findings are worked through.
+  arm-ttk:
+    name: ARM TTK (advisory)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone ARM TTK
+        shell: pwsh
+        run: git clone --depth 1 https://github.com/Azure/arm-ttk.git $env:RUNNER_TEMP/arm-ttk
+
+      - name: Test main templates
+        shell: pwsh
+        run: |
+          Import-Module "$env:RUNNER_TEMP/arm-ttk/arm-ttk/arm-ttk.psd1"
+          Test-AzTemplate -TemplatePath ./deployment/vmdeployment -Skip 'DeploymentTemplate-Schema-Is-Correct'
