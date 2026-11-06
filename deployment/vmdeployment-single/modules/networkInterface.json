@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.0.0.0",
+    "contentVersion": "1.1.0.0",
     "parameters": {
         "location": {
             "type": "string",
@@ -35,7 +35,14 @@
         "pipDeleteOption": {
             "type": "string",
             "metadata": {
-                "description": "Whether the public IP address is deleted or detached when the network interface is deleted."
+                "description": "Whether the public IP address is deleted or detached when the network interface is deleted. Ignored when publicIpEnabled is false."
+            }
+        },
+        "publicIpEnabled": {
+            "type": "bool",
+            "defaultValue": true,
+            "metadata": {
+                "description": "true to attach a public IP address to each network interface, false to leave the interface with a private address only. False when RDP is published through the external automation, which reaches the machines without one."
             }
         },
         "existingVnet": {
@@ -128,7 +135,27 @@
                 "enabled": false
             }
         },
-        "acceleratedNetworking": "[variables('accelNetBySize')[parameters('vmSize')].enabled]"
+        "acceleratedNetworking": "[variables('accelNetBySize')[parameters('vmSize')].enabled]",
+        "ipConfigCommon": {
+            "privateIPAllocationMethod": "Dynamic",
+            "subnet": {
+                "id": "[if(equals(parameters('vnetNewOrExisting'), 'new'), variables('newVnetId'), variables('existingSubnetId'))]"
+            }
+        },
+        "copy": [
+            {
+                "name": "pipAttachments",
+                "count": "[parameters('vmCount')]",
+                "input": {
+                    "publicIPAddress": {
+                        "id": "[resourceId('Microsoft.Network/publicIPAddresses', concat(variables('vmNamePrefix'), copyIndex('pipAttachments', 1), '-ip'))]",
+                        "properties": {
+                            "deleteOption": "[parameters('pipDeleteOption')]"
+                        }
+                    }
+                }
+            }
+        ]
     },
     "resources": [
         {
@@ -153,18 +180,7 @@
                 "ipConfigurations": [
                     {
                         "name": "ipConfig1",
-                        "properties": {
-                            "privateIPAllocationMethod": "Dynamic",
-                            "subnet": {
-                                "id": "[if(equals(parameters('vnetNewOrExisting'), 'new'), variables('newVnetId'), variables('existingSubnetId'))]"
-                            },
-                            "publicIPAddress": {
-                                "id": "[resourceId('Microsoft.Network/publicIPAddresses', concat(variables('vmNamePrefix'), copyIndex('nicLoop', 1), '-ip'))]",
-                                "properties": {
-                                    "deleteOption": "[parameters('pipDeleteOption')]"
-                                }
-                            }
-                        }
+                        "properties": "[union(variables('ipConfigCommon'), if(parameters('publicIpEnabled'), variables('pipAttachments')[copyIndex('nicLoop')], json('{}')))]"
                     }
                 ],
                 "enableAcceleratedNetworking": "[variables('acceleratedNetworking')]",

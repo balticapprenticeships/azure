@@ -28,8 +28,11 @@
          allows.
      10. Every function used in a UI expression is a real createUiDefinition function.
      11. Any _moduleRepo path names the folder these templates actually live in.
+     12. The public IP gate holds together - a conditional public IP deployment, the
+         publicIpEnabled pass to the NIC module, and a conditional FQDN output, all
+         reading the same expression.
 
-    The original two-template folder has ten checks. Three of them existed only to detect
+    The original two-template folder has twelve checks. Three of them existed only to detect
     drift between serverMain and desktopMain - the rwkeyVault map agreeing, the outputs
     agreeing, both mains pointing at the same module ref. They are gone here because there
     is one main template, so there is nothing to drift against.
@@ -463,6 +466,43 @@ foreach ($file in $jsonFiles) {
     }
     if ($Matches['folder'] -ne $folderName) {
         Add-Failure "$($file.Name): _moduleRepo points at '$($Matches['folder'])/modules' but these templates are in '$folderName' - the modules would be fetched from the wrong folder"
+    }
+}
+
+# ------------------------- 12. the public IP gate holds together
+# rdpPublish decides whether a public IP is deployed at all, and that decision has to be
+# made in three places at once: the public IP deployment's condition, the publicIpEnabled
+# value passed to the NIC module, and the FQDN output condition. Drop the NIC half and
+# every NIC points at an IP that was never created; drop the output half and the
+# deployment fails referencing a skipped deployment. Both only show up at deploy time.
+$mainDoc = Get-Json (Join-Path $root 'main.json')
+
+if ($mainDoc) {
+    $pipDeployment = $mainDoc.resources | Where-Object { $_.name -eq 'DeployPublicIPAddress' }
+    $nicDeployment = $mainDoc.resources | Where-Object { $_.name -eq 'DeployNetworkInterface' }
+    $pipCondition  = $pipDeployment.condition
+
+    if ($pipCondition) {
+        $nicValue = $nicDeployment.properties.parameters.publicIpEnabled.value
+        if (-not $nicValue) {
+            Add-Failure "main.json: DeployPublicIPAddress is conditional but DeployNetworkInterface is not passed publicIpEnabled - every NIC would point at a public IP that was not created"
+        }
+        elseif ($nicValue -ne $pipCondition) {
+            Add-Failure "main.json: DeployPublicIPAddress condition is '$pipCondition' but publicIpEnabled is passed '$nicValue' - these must be the same expression"
+        }
+
+        $fqdnCondition = $mainDoc.outputs.virtualMachineFQDN.condition
+        if (-not $fqdnCondition) {
+            Add-Failure "main.json: DeployPublicIPAddress is conditional but the virtualMachineFQDN output is not - referencing the outputs of a skipped deployment fails the deployment"
+        }
+        elseif ($fqdnCondition -ne $pipCondition) {
+            Add-Failure "main.json: DeployPublicIPAddress condition is '$pipCondition' but the virtualMachineFQDN output condition is '$fqdnCondition' - these must be the same expression"
+        }
+
+        $nicDoc = Get-Json (Join-Path $root 'modules\networkInterface.json')
+        if ($nicDoc -and -not $nicDoc.parameters.publicIpEnabled) {
+            Add-Failure "modules/networkInterface.json: main.json passes publicIpEnabled but the module does not declare it"
+        }
     }
 }
 

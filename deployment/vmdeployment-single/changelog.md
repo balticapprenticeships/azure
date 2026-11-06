@@ -10,6 +10,19 @@ over. See `DESIGN.md` for what was merged and why.
 
 # User Interface
 
+## [1.2.0.0] 6.11.2026
+[ui]
+### Change
+  the RDP publish dropdown now says what it does to the public IP address. Yes hands the
+  machines to the RDP publishing automation and builds them with no public IP of their own,
+  so there is no DNS name to connect to directly; No gives each machine a public IP and a
+  DNS name. The option values are unchanged - this is the label, the two option descriptions
+  and the tooltip.
+  Updated currentVersion to 1.2.0.0
+### Note
+  the dropdown is not new and neither are its values. What changed is in main.json 1.3.0.0:
+  rdpPublish now decides whether the public IP is deployed at all, not just the tag value.
+
 ## [1.1.2.0] 4.11.2026
 [ui]
 ### Fix
@@ -78,6 +91,35 @@ over. See `DESIGN.md` for what was merged and why.
   is chosen.
 
 # Main Template
+
+## [1.3.0.0] 6.11.2026
+[main]
+### Change
+  rdpPublish now controls whether a public IP address is deployed. Yes means the RDP
+  publishing automation reaches these machines, so they are built with no public IP of
+  their own; No keeps the previous behaviour, one public IP and DNS label per machine.
+  new deployPublicIp variable, equals(rdpPublish, 'No'), read in all three places that
+  need it so they cannot drift apart.
+  DeployPublicIPAddress is now conditional on it.
+  DeployNetworkInterface is passed publicIpEnabled, so the NIC leaves the public IP off
+  its ip configuration rather than pointing at one that was never created.
+  the virtualMachineFQDN output is now conditional on it - there is no FQDN to return, and
+  referencing the outputs of a deployment that was skipped fails the deployment.
+  rdpPublish description rewritten to say what each value now does.
+  Updated contentVersion to 1.3.0.0
+  Updated contentVersion for networkInterface module to 1.1.0.0
+### Note
+  DeployNetworkInterface still dependsOn DeployPublicIPAddress. A dependency on a skipped
+  conditional deployment is satisfied rather than failing, so this is left as it is.
+  tools/Test-Templates.ps1 gained a check that the three halves of the gate agree - a
+  conditional public IP deployment, the publicIpEnabled pass, and the FQDN output
+  condition, all reading the same expression. Removing one of the three is the way this
+  breaks, and two of those three only fail at deployment time.
+  outbound internet is unaffected on a machine with no public IP. The vnet and subnet are
+  pre-created with the resource group and the subnet's route table sends internet traffic to
+  the firewall, which is an explicit outbound method - so default outbound access, and its
+  retirement, never applied to these machines. What the firewall must allow is
+  raw.githubusercontent.com, for the DSC archive and the NVIDIA driver script. See README.md.
 
 ## [1.2.0.0] 4.11.2026
 [main]
@@ -192,6 +234,20 @@ over. See `DESIGN.md` for what was merged and why.
 ### Add
   copied unchanged from vmdeployment/modules/network.json 4.0.1.0, with the module repository
   path pointed at deployment/vmdeployment-single/modules.
+
+## [1.1.0.0] 6.11.2026
+[networkInterface]
+### Add
+  new publicIpEnabled parameter, type bool, default true. False leaves the network
+  interface with a private address only, for when RDP is published through the external
+  automation and no public IP is deployed. See main 1.3.0.0.
+### Change
+  the ip configuration is now assembled with union() - a constant ipConfigCommon half, and
+  a per-machine publicIPAddress half built by a variable copy loop and included only when
+  publicIpEnabled is true. This is the same union() idiom the VM module uses for its
+  conditional tags, and it avoids relying on a null property being dropped.
+  pipDeleteOption description notes that it is ignored when publicIpEnabled is false.
+  Updated contentVersion to 1.1.0.0
 
 ## [1.0.0.0] 4.11.2026
 [networkInterface]

@@ -2,7 +2,7 @@
     "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
     "handler": "Microsoft.Azure.CreateUIDef",
     "version": "0.1.2-preview",
-    "currentVersion": "1.1.2.0",
+    "currentVersion": "1.2.0.0",
     "parameters": {
         "config": {
             "isWizard": true
@@ -865,19 +865,19 @@
                                     "allowedValues": [
                                         {
                                             "label": "No",
-                                            "description": "Sets the RdpPublish tag to No.",
+                                            "description": "Each virtual machine gets its own public IP address and DNS name, and a coach connects to it directly.",
                                             "value": "No"
                                         },
                                         {
                                             "label": "Yes",
-                                            "description": "Sets the RdpPublish tag to Yes, which the RDP publishing automation reads.",
+                                            "description": "The RDP publishing automation reads the RdpPublish tag and publishes access. The virtual machines are built without a public IP address.",
                                             "value": "Yes"
                                         }
                                     ],
                                     "required": true
                                 },
                                 "visible": true,
-                                "toolTip": "Here you can set the RdpPublish tag, which the RDP publishing automation reads. It does not change the network security group - RDP is open to the internet for all lab machines by design."
+                                "toolTip": "Yes hands these machines to the RDP publishing automation, which reads the RdpPublish tag, and builds them with no public IP address of their own - so there is no direct DNS name to connect to. No gives each machine a public IP address and DNS name for direct access. Neither setting changes the network security group - RDP is open to the internet for all lab machines by design."
                             },
                             {
                                 "name": "resourceGroupCleanup",

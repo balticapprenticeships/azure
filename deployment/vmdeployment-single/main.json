@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.2.0.0",
+    "contentVersion": "1.3.0.0",
     "parameters": {
         "vmPlatform": {
             "type": "string",
@@ -339,7 +339,7 @@
                 "No"
             ],
             "metadata": {
-                "description": "Value for the RdpPublish tag, applied to both server and client virtual machines. Read by other automation - it does not change the network security group, which allows RDP from any address by design."
+                "description": "Yes publishes RDP through the external RDP publishing automation, which reads the RdpPublish tag, and the virtual machines are built with no public IP address. No gives every virtual machine a public IP address with a DNS label so a coach can connect directly. Either way the network security group allows RDP from any address by design."
             }
         },
         "resourceGroupCleanup": {
@@ -484,6 +484,7 @@
         "vaultResourceGroup": "[concat(variables('rwkeyVault')[parameters('routeway')].keyVaultRg, 'OMSRg')]",
         "vaultName": "[concat('VMDeployment', variables('rwkeyVault')[parameters('routeway')].rwSuffix)]",
         "deploymentsApi": "2025-04-01",
+        "deployPublicIp": "[equals(parameters('rdpPublish'), 'No')]",
         "_moduleRepo": "[concat('/', parameters('_artifactsRef'), '/deployment/vmdeployment-single/modules')]"
     },
     "resources": [
@@ -549,6 +550,7 @@
             "dependsOn": []
         },
         {
+            "condition": "[variables('deployPublicIp')]",
             "name": "DeployPublicIPAddress",
             "type": "Microsoft.Resources/deployments",
             "apiVersion": "[variables('deploymentsApi')]",
@@ -592,7 +594,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(parameters('_artifactsLocation'), variables('_moduleRepo'), '/networkInterface.json')]",
-                    "contentVersion": "1.0.0.0"
+                    "contentVersion": "1.1.0.0"
                 },
                 "parameters": {
                     "location": {
@@ -612,6 +614,9 @@
                     },
                     "pipDeleteOption": {
                         "value": "[parameters('pipDeleteOption')]"
+                    },
+                    "publicIpEnabled": {
+                        "value": "[variables('deployPublicIp')]"
                     },
                     "existingVnet": {
                         "value": "[parameters('existingVnet')]"
@@ -889,6 +894,7 @@
             "value": "[parameters('imageVersion')]"
         },
         "virtualMachineFQDN": {
+            "condition": "[variables('deployPublicIp')]",
             "type": "array",
             "value": "[reference('DeployPublicIPAddress').outputs.FQDN.value]"
         }
