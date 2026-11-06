@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.1.0.0",
+    "contentVersion": "1.2.0.0",
     "parameters": {
         "location": {
             "type": "string",
@@ -86,7 +86,8 @@
     "variables": {
         "networkApi": "2024-07-01",
         "nsgName": "[concat(resourceGroup().name, '-nsg')]",
-        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachInitials')))]",
+        "nameSuffix": "[substring(uniqueString(resourceGroup().id), 0, 3)]",
+        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachInitials'), variables('nameSuffix')))]",
         "vnetname": "[concat(resourceGroup().name, '-vnet')]",
         "newVnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetname'), parameters('subnetName'))]",
         "existingVnetId": "[resourceId('Microsoft.Network/virtualNetworks/', parameters('existingVnet'))]",

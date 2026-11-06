@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.0.0.0",
+    "contentVersion": "1.1.0.0",
     "parameters": {
         "location": {
             "type": "string",
@@ -54,7 +54,8 @@
     "functions": [],
     "variables": {
         "devTestLabApi": "2018-09-15",
-        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachInitials')))]"
+        "nameSuffix": "[substring(uniqueString(resourceGroup().id), 0, 3)]",
+        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachInitials'), variables('nameSuffix')))]"
     },
     "resources": [
         {

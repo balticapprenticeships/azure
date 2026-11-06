@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.1.0.0",
+    "contentVersion": "1.5.0.0",
     "parameters": {
         "vmPlatform": {
             "type": "string",
@@ -115,10 +115,24 @@
                 "description": "Deploy the Guest Attestation extension. Only applied when securityType is TrustedLaunch."
             }
         },
-        "idleVM": {
+        "idleHibernate": {
             "type": "string",
             "metadata": {
-                "description": "Value for the IdleVm tag, read by the automation that shuts down unused machines."
+                "description": "Enabled or Disabled. Becomes the IdleHibernate tag, and when Enabled the idle hibernation VM application is installed on every machine."
+            }
+        },
+        "idleHibernateAppName": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "Name of the gallery application to install when idleHibernate is Enabled. It has to live in the same Azure Compute Gallery as the course images, because the package id is composed from the same subscription, resource group and gallery - see the idleHibernateAppPackageId variable. Empty installs nothing, so the machines are tagged for idle hibernation without the agent that performs it."
+            }
+        },
+        "idleHibernateAppVersion": {
+            "type": "string",
+            "defaultValue": "latest",
+            "metadata": {
+                "description": "Version of that gallery application. Microsoft documents packageReferenceId as ending in a version; latest is a documented alias for gallery image versions and is not documented for application versions, so pin a real version if latest is rejected."
             }
         },
         "nicDeleteOption": {
@@ -204,12 +218,33 @@
             "metadata": {
                 "description": "PostgreSQL password, read from the routeway Key Vault. Declared but not consumed by this module; it is read by other automation. See REVIEW.md P2-9."
             }
+        },
+        "idleHibernateRoleDefinitionId": {
+            "type": "string",
+            "defaultValue": "",
+            "metadata": {
+                "description": "GUID of the VM Idle Self Hibernate custom role, granted to each machine's own system-assigned managed identity on itself so it can hibernate when idle. Empty skips the role assignment and the machines are built with an identity but no permissions - which is what happens if the deploying coach has no rights to create role assignments."
+            }
         }
     },
     "functions": [],
     "variables": {
         "computeApi": "2024-11-01",
-        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachInitials')))]",
+        "authorizationApi": "2022-04-01",
+        "idleHibernateRoleDefinition": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', parameters('idleHibernateRoleDefinitionId'))]",
+        "installIdleHibernateApp": "[and(equals(parameters('idleHibernate'), 'Enabled'), not(empty(parameters('idleHibernateAppName'))))]",
+        "idleHibernateAppPackageId": "[concat('/subscriptions/', parameters('subscriptionId'), '/resourceGroups/', variables('acgRG'), '/providers/Microsoft.Compute/galleries/', variables('galleryImageName'), '/applications/', parameters('idleHibernateAppName'), '/versions/', parameters('idleHibernateAppVersion'))]",
+        "idleHibernateAppProfile": {
+            "galleryApplications": [
+                {
+                    "packageReferenceId": "[variables('idleHibernateAppPackageId')]",
+                    "order": 1,
+                    "treatFailureAsDeploymentFailure": false
+                }
+            ]
+        },
+        "nameSuffix": "[substring(uniqueString(resourceGroup().id), 0, 3)]",
+        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachInitials'), variables('nameSuffix')))]",
         "acgRG": "BalticImageGalleryRg",
         "galleryImageName": "TrainingACG",
         "WindowsLicense": "[if(equals(parameters('vmPlatform'), 'WindowsServer'), 'Windows_Server', 'Windows_Client')]",
@@ -341,7 +376,7 @@
             "CourseDate": "[concat('WC-', parameters('courseStartDate'))]",
             "CourseEndDay": "[parameters('courseEndDay')]",
             "Schedule": "[if(equals(parameters('startupSchedule'), 'Yes'), 'StartDaily', 'NoSchedule')]",
-            "IdleShutdown": "[parameters('idleVm')]",
+            "IdleHibernate": "[parameters('idleHibernate')]",
             "Cleanup": "[parameters('resourceGroupCleanup')]",
             "Platform": "[if(equals(parameters('vmPlatform'), 'WindowsServer'), 'WindowsServer', 'WindowsClient')]",
             "RdpPublish": "[parameters('rdpPublish')]",
@@ -366,6 +401,9 @@
             "name": "[concat(variables('vmNamePrefix'), copyIndex('virtualMachineLoop', 1))]",
             "location": "[parameters('location')]",
             "tags": "[variables('vmTags')]",
+            "identity": {
+                "type": "SystemAssigned"
+            },
             "copy": {
                 "name": "virtualMachineLoop",
                 "count": "[parameters('vmCount')]"
@@ -421,7 +459,8 @@
                     "bootDiagnostics": {
                         "enabled": true
                     }
-                }
+                },
+                "applicationProfile": "[if(variables('installIdleHibernateApp'), variables('idleHibernateAppProfile'), json('null'))]"
             }
         },
         {
@@ -564,9 +603,37 @@
                 "autoUpgradeMinorVersion": true,
                 "settings": {}
             }
+        },
+        {
+            "condition": "[not(empty(parameters('idleHibernateRoleDefinitionId')))]",
+            "type": "Microsoft.Authorization/roleAssignments",
+            "apiVersion": "[variables('authorizationApi')]",
+            "name": "[guid(resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('hibernateRoleLoop', 1))), variables('idleHibernateRoleDefinition'))]",
+            "scope": "[concat('Microsoft.Compute/virtualMachines/', variables('vmNamePrefix'), copyIndex('hibernateRoleLoop', 1))]",
+            "copy": {
+                "name": "hibernateRoleLoop",
+                "count": "[parameters('vmCount')]"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('hibernateRoleLoop', 1)))]"
+            ],
+            "properties": {
+                "roleDefinitionId": "[variables('idleHibernateRoleDefinition')]",
+                "principalId": "[reference(resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('hibernateRoleLoop', 1))), variables('computeApi'), 'Full').identity.principalId]",
+                "principalType": "ServicePrincipal"
+            }
         }
     ],
     "outputs": {
+        "vmPrincipalId": {
+            "type": "array",
+            "copy": {
+                "count": "[parameters('vmCount')]",
+                "input": {
+                    "value": "[reference(resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex(1))), variables('computeApi'), 'Full').identity.principalId]"
+                }
+            }
+        },
         "vmId": {
             "type": "array",
             "copy": {

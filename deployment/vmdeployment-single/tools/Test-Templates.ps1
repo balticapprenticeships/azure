@@ -31,6 +31,16 @@
      12. The public IP gate holds together - a conditional public IP deployment, the
          publicIpEnabled pass to the NIC module, and a conditional FQDN output, all
          reading the same expression.
+     13. Every module builds vmNamePrefix the same way, and the longest host name the
+         parameters allow still fits the 15 character Windows limit.
+     14. The managed identity gate holds together - a role assignment on each VM, a
+         system-assigned identity to assign it to, and the role definition id reaching
+         the module from main.json.
+     15. The idle hibernation gate holds together - the UI dropdown, main.json's allowed
+         values and the VM application all agree on Enabled/Disabled, and the tag the
+         automation reads is still written.
+     16. No file hardcodes a subscription id. These templates are published to a public
+         repository and every subscription reference comes from the routeway Key Vault.
 
     The original two-template folder has twelve checks. Three of them existed only to detect
     drift between serverMain and desktopMain - the rwkeyVault map agreeing, the outputs
@@ -503,6 +513,252 @@ if ($mainDoc) {
         if ($nicDoc -and -not $nicDoc.parameters.publicIpEnabled) {
             Add-Failure "modules/networkInterface.json: main.json passes publicIpEnabled but the module does not declare it"
         }
+    }
+}
+
+# ------------------- 13. machine names agree across modules and fit in 15 characters
+# Four modules build vmNamePrefix independently - the VM, its NIC, its public IP and its
+# shutdown schedule - and they find each other by that name. One of them spelling it
+# differently means the VM looks for a NIC that does not exist. The name also lands in
+# osProfile.computerName, where Windows stops at 15 characters, so the parameters'
+# own limits have to add up to no more than that: vmName + initials + suffix + index.
+$prefixExpressions = @{}
+
+foreach ($file in $jsonFiles) {
+    if ($file.Name -like 'ui*') { continue }
+    $doc = Get-Json $file.FullName
+    if (-not $doc -or -not $doc.variables -or -not $doc.variables.vmNamePrefix) { continue }
+    $prefixExpressions[$file.Name] = $doc.variables.vmNamePrefix
+
+    if ($doc.variables.vmNamePrefix -match 'nameSuffix' -and -not $doc.variables.nameSuffix) {
+        Add-Failure "$($file.Name): vmNamePrefix reads nameSuffix but the module does not declare it"
+    }
+}
+
+$distinctPrefixes = $prefixExpressions.Values | Sort-Object -Unique
+if ($distinctPrefixes.Count -gt 1) {
+    $detail = ($prefixExpressions.GetEnumerator() | Sort-Object Name |
+        ForEach-Object { "$($_.Key) -> $($_.Value)" }) -join '; '
+    Add-Failure "the modules do not agree on vmNamePrefix, so resources would be created under one name and looked up under another: $detail"
+}
+
+# the host name budget
+$mainForNames = Get-Json (Join-Path $root 'main.json')
+if ($mainForNames) {
+    $nameMax     = $mainForNames.parameters.vmName.maxLength
+    $initialsMax = $mainForNames.parameters.deliveringCoachInitials.maxLength
+    $countMax    = $mainForNames.parameters.vmCount.maxValue
+
+    if (-not $nameMax) {
+        Add-Failure "main.json: vmName has no maxLength, so nothing stops a name that exceeds the 15 character Windows host name limit"
+    }
+    elseif (-not $initialsMax) {
+        Add-Failure "main.json: deliveringCoachInitials has no maxLength, so the host name budget cannot be checked"
+    }
+    else {
+        $suffixLength = 0
+        $anyPrefix = $prefixExpressions.Values | Select-Object -First 1
+        if ($anyPrefix -match 'nameSuffix') {
+            $suffixDoc = $jsonFiles | Where-Object { $_.Name -eq 'windowsVm.json' } |
+                ForEach-Object { Get-Json $_.FullName }
+            if ($suffixDoc.variables.nameSuffix -match "uniqueString\(resourceGroup\(\)\.id\), 0, (\d+)\)") {
+                $suffixLength = [int]$Matches[1]
+            }
+            else {
+                Add-Failure "modules/windowsVm.json: cannot read the suffix length out of nameSuffix, so the host name budget cannot be checked"
+            }
+        }
+
+        $indexDigits = "$countMax".Length
+        $worstCase   = $nameMax + $initialsMax + $suffixLength + $indexDigits
+        if ($worstCase -gt 15) {
+            Add-Failure "the longest host name the parameters allow is $worstCase characters (vmName $nameMax + initials $initialsMax + suffix $suffixLength + index $indexDigits), over the 15 character Windows limit - Azure rejects the deployment"
+        }
+
+        $uiFileObj = $jsonFiles | Where-Object { $_.Name -like 'ui*' } | Select-Object -First 1
+        if ($uiFileObj) {
+            $uiJson = Get-Content -LiteralPath $uiFileObj.FullName -Raw
+            if ($uiJson -match '\^\[a-z0-9A-Z\]\{(\d+),(\d+)\}\$') {
+                $uiMax = [int]$Matches[2]
+                if ($uiMax -gt $nameMax) {
+                    Add-Failure "the UI lets a coach type a $uiMax character VM name but main.json allows $nameMax - the portal would accept a name the deployment then rejects"
+                }
+            }
+        }
+    }
+}
+
+# ------------------- 14. the managed identity gate holds together
+# A role assignment is useless without an identity to assign it to, and an identity
+# the module never receives a role definition id for is a silent no-op. The three
+# halves - the roleAssignments resource, identity.type on the VM, and the parameter
+# arriving from main.json - have to move together or the self-hibernate feature is
+# quietly dead.
+$vmModule = $jsonFiles | Where-Object { $_.Name -eq 'windowsVm.json' } | Select-Object -First 1
+if ($vmModule) {
+    $vmDoc = Get-Json $vmModule.FullName
+    $roleRes = $vmDoc.resources |
+        Where-Object { $_.type -eq 'Microsoft.Authorization/roleAssignments' }
+    $vmRes = $vmDoc.resources |
+        Where-Object { $_.type -eq 'Microsoft.Compute/virtualMachines' } | Select-Object -First 1
+
+    if ($roleRes) {
+        if (-not $vmRes.identity -or $vmRes.identity.type -ne 'SystemAssigned') {
+            Add-Failure "modules/windowsVm.json: a role assignment is declared but the virtual machine has no SystemAssigned identity, so there is no principal to assign the role to"
+        }
+        if (-not $vmDoc.parameters.idleHibernateRoleDefinitionId) {
+            Add-Failure "modules/windowsVm.json: the role assignment reads idleHibernateRoleDefinitionId but the module does not declare it as a parameter"
+        }
+        foreach ($r in @($roleRes)) {
+            if (-not $r.scope) {
+                Add-Failure "modules/windowsVm.json: the role assignment has no scope, so it would be assigned at the resource group instead of the one machine it is meant for"
+            }
+            if ($r.properties.principalId -notmatch 'identity\.principalId') {
+                Add-Failure "modules/windowsVm.json: the role assignment principalId does not read the machine identity.principalId"
+            }
+        }
+    }
+    elseif ($vmRes.identity) {
+        Add-Warning "modules/windowsVm.json: the virtual machine has a managed identity but nothing assigns it a role, so the identity can do nothing"
+    }
+
+    $mainForIdentity = Get-Json (Join-Path $root 'main.json')
+    if ($roleRes -and $mainForIdentity) {
+        if (-not $mainForIdentity.parameters.idleHibernateRoleDefinitionId) {
+            Add-Failure "main.json: windowsVm.json needs idleHibernateRoleDefinitionId but main.json does not declare it, so the module would fall back to its own default and assign nothing"
+        }
+        $vmDeployment = $mainForIdentity.resources |
+            Where-Object { $_.name -eq 'DeployVm' } | Select-Object -First 1
+        if ($vmDeployment -and -not $vmDeployment.properties.parameters.idleHibernateRoleDefinitionId) {
+            Add-Failure "main.json: DeployVm does not pass idleHibernateRoleDefinitionId to windowsVm.json, so no role is ever assigned"
+        }
+        if (-not $mainForIdentity.parameters.idleHibernateRoleDefinitionId.defaultValue) {
+            Add-Warning "main.json: idleHibernateRoleDefinitionId has an empty default, so a portal deployment builds the machines with an identity but no self-hibernate role - paste the custom role GUID as the default"
+        }
+    }
+}
+
+# ------------------- 15. the idle hibernation gate holds together
+# Four things have to agree: the UI dropdown, main.json's allowedValues, the tag the
+# external automation filters on, and the condition that installs the VM application.
+# The failure mode is silent - a coach picks Enabled, the tag says Enabled, and no
+# application is ever installed, so nothing hibernates and nothing complains.
+$vmModule = $jsonFiles | Where-Object { $_.Name -eq 'windowsVm.json' } | Select-Object -First 1
+$mainForIdle = Get-Json (Join-Path $root 'main.json')
+$uiForIdle = $jsonFiles | Where-Object { $_.Name -like 'ui*' } | Select-Object -First 1
+
+if ($vmModule -and $mainForIdle) {
+    $vmIdleDoc = Get-Json $vmModule.FullName
+    $idleParam = $mainForIdle.parameters.idleHibernate
+
+    if (-not $idleParam) {
+        Add-Failure "main.json: no idleHibernate parameter - the idle hibernation option has gone missing"
+    }
+    else {
+        $allowed = @($idleParam.allowedValues)
+        foreach ($v in @('Enabled', 'Disabled')) {
+            if ($allowed -notcontains $v) {
+                Add-Failure "main.json: idleHibernate does not allow '$v' - the UI offers Enabled and Disabled, so the deployment would reject what a coach picked"
+            }
+        }
+        if ($idleParam.defaultValue -ne 'Disabled') {
+            Add-Failure "main.json: idleHibernate defaults to '$($idleParam.defaultValue)' rather than Disabled, so a CLI deployment would turn idle hibernation on without being asked"
+        }
+    }
+
+    # the tag the automation reads
+    $vmTags = $vmIdleDoc.variables.vmTags
+    if ($vmTags -and -not $vmTags.IdleHibernate) {
+        Add-Failure "modules/windowsVm.json: the virtual machine tags no longer include IdleHibernate, which is what the idle hibernation automation filters on"
+    }
+
+    # the VM application
+    $vmRes = $vmIdleDoc.resources |
+        Where-Object { $_.type -eq 'Microsoft.Compute/virtualMachines' } | Select-Object -First 1
+    if ($vmRes.properties.applicationProfile) {
+        $profileExpr = [string]$vmRes.properties.applicationProfile
+        if ($profileExpr -notmatch 'installIdleHibernateApp') {
+        Add-Failure "modules/windowsVm.json: applicationProfile does not read installIdleHibernateApp, so the VM application is not gated on the idle hibernation option"
+        }
+        $gate = [string]$vmIdleDoc.variables.installIdleHibernateApp
+        if ($gate -notmatch "idleHibernate'\), 'Enabled'") {
+            Add-Failure "modules/windowsVm.json: installIdleHibernateApp does not test idleHibernate against Enabled, so the application would install whatever a coach picked"
+        }
+        if ($gate -notmatch 'idleHibernateAppName') {
+            Add-Failure "modules/windowsVm.json: installIdleHibernateApp does not check idleHibernateAppName, so an empty application name would be composed into a malformed package reference"
+        }
+        # the package id is composed, not literal, so the subscription is never hardcoded
+        $packageId = [string]$vmIdleDoc.variables.idleHibernateAppPackageId
+        if (-not $packageId) {
+            Add-Failure "modules/windowsVm.json: no idleHibernateAppPackageId variable - the VM application package id has to be composed from the subscription id read from the Key Vault"
+        }
+        elseif ($packageId -notmatch "parameters\('subscriptionId'\)") {
+            Add-Failure "modules/windowsVm.json: idleHibernateAppPackageId does not read the subscriptionId parameter, so the subscription is coming from somewhere other than the routeway Key Vault"
+        }
+        foreach ($n in @('idleHibernateAppName', 'idleHibernateAppVersion')) {
+            if (-not $vmIdleDoc.parameters.$n) {
+                Add-Failure "modules/windowsVm.json: the VM application needs $n but the module does not declare it as a parameter"
+            }
+            if (-not $mainForIdle.parameters.$n) {
+                Add-Failure "main.json: windowsVm.json needs $n but main.json does not declare it"
+            }
+        }
+        $vmDeploy = $mainForIdle.resources |
+            Where-Object { $_.name -eq 'DeployVm' } | Select-Object -First 1
+        if ($vmDeploy) {
+            foreach ($n in @('idleHibernateAppName', 'idleHibernateAppVersion')) {
+                if (-not $vmDeploy.properties.parameters.$n) {
+                    Add-Failure "main.json: DeployVm does not pass $n to windowsVm.json, so the application package id would be built from the module defaults"
+                }
+            }
+        }
+        if (-not $mainForIdle.parameters.idleHibernateAppName.defaultValue) {
+            Add-Warning "main.json: idleHibernateAppName has an empty default, so picking Enabled tags the machines for idle hibernation without installing the application that performs it"
+        }
+    }
+    elseif ($vmIdleDoc.parameters.idleHibernateAppName) {
+        Add-Failure "modules/windowsVm.json: idleHibernateAppName is declared but no applicationProfile uses it, so picking Enabled installs nothing"
+    }
+
+    # and the UI has to offer the same two values, by the same name
+    if ($uiForIdle) {
+        $uiIdleJson = Get-Content -LiteralPath $uiForIdle.FullName -Raw
+        if ($uiIdleJson -notmatch '"idleHibernate"') {
+            Add-Failure "$($uiForIdle.Name): no idleHibernate control or output, so main.json would fall back to its own default and a coach could never turn idle hibernation on"
+        }
+        $uiDoc = Get-Json $uiForIdle.FullName
+        $uiOutputs = $uiDoc.parameters.outputs
+        if ($uiOutputs -and -not $uiOutputs.idleHibernate) {
+            Add-Failure "$($uiForIdle.Name): the outputs section does not map idleHibernate, so the coach's choice never reaches main.json"
+        }
+        $uiIdleControl = [regex]::Match($uiIdleJson,
+            '"name"\s*:\s*"idleHibernate".*?"toolTip"', 'Singleline')
+        if ($uiIdleControl.Success) {
+            if ($uiIdleControl.Value -match '"visible"\s*:\s*false') {
+                Add-Failure "$($uiForIdle.Name): the idleHibernate control is hidden, so the option a coach is meant to configure is invisible"
+            }
+            foreach ($v in @('Enabled', 'Disabled')) {
+                if ($uiIdleControl.Value -notmatch "\`"value\`"\s*:\s*\`"$v\`"") {
+                    Add-Failure "$($uiForIdle.Name): the idleHibernate dropdown does not offer the value '$v', which main.json allows"
+                }
+            }
+            if ($uiIdleControl.Value -notmatch '"defaultValue"\s*:\s*"Disabled"') {
+                Add-Failure "$($uiForIdle.Name): the idleHibernate dropdown does not default to Disabled"
+            }
+        }
+    }
+}
+
+# ------------------- 16. no file hardcodes a subscription id
+# Every subscription reference in this folder is read from the routeway Key Vault, and
+# these templates are served unauthenticated from a public repository. A literal
+# subscription GUID in a resource id is both an inconsistency and a tenant move that
+# needs a template edit rather than a Key Vault edit.
+foreach ($file in $jsonFiles) {
+    $raw = Get-Content -LiteralPath $file.FullName -Raw
+    $hits = [regex]::Matches($raw, '/subscriptions/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+    foreach ($hit in $hits) {
+        Add-Failure "$($file.Name): hardcodes a subscription id ($($hit.Value)) - read it from the routeway Key Vault and compose the resource id, the way windowsVm.json builds imageReference and idleHibernateAppPackageId"
     }
 }
 

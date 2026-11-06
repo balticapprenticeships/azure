@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.0.0.0",
+    "contentVersion": "1.1.0.0",
     "parameters": {
         "location": {
             "type": "string",
@@ -48,8 +48,8 @@
     "functions": [],
     "variables": {
         "networkApi": "2024-07-01",
-        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachinitials')))]",
-        "dnsSuffix": "[substring(uniqueString(resourceGroup().id), 0, 4)]"
+        "nameSuffix": "[substring(uniqueString(resourceGroup().id), 0, 3)]",
+        "vmNamePrefix": "[toUpper(concat(parameters('vmName'), parameters('deliveringCoachInitials'), variables('nameSuffix')))]"
     },
     "resources": [
         {
@@ -73,7 +73,7 @@
                 "publicIPAddressVersion": "IPv4",
                 "publicIPAllocationMethod": "Static",
                 "dnsSettings": {
-                    "domainNameLabel": "[toLower(concat('baltic-', variables('vmNamePrefix'), copyIndex('publicIpNameLoop', 1), '-', variables('dnsSuffix')))]"
+                    "domainNameLabel": "[toLower(concat('baltic-', variables('vmNamePrefix'), copyIndex('publicIpNameLoop', 1)))]"
                 }
             },
             "sku": {

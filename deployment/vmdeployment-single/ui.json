@@ -2,7 +2,7 @@
     "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
     "handler": "Microsoft.Azure.CreateUIDef",
     "version": "0.1.2-preview",
-    "currentVersion": "1.2.0.0",
+    "currentVersion": "1.4.0.0",
     "parameters": {
         "config": {
             "isWizard": true
@@ -447,13 +447,13 @@
                                 "name": "vmName",
                                 "label": "Virtual Machine Name",
                                 "type": "Microsoft.Common.TextBox",
-                                "placeholder": "e.g., 306Client",
+                                "placeholder": "e.g., 306Clnt",
                                 "constraints": {
-                                    "regex": "^[a-z0-9A-Z]{3,10}$",
-                                    "validationMessage": "The VM name must be between 3 and 10 characters long and contain only letters and numbers.",
+                                    "regex": "^[a-z0-9A-Z]{3,8}$",
+                                    "validationMessage": "The VM name must be between 3 and 8 characters long and contain only letters and numbers.",
                                     "required": true
                                 },
-                                "toolTip": "This is the name of your virtual machine e.g., 306Client"
+                                "toolTip": "This is the name of your virtual machine e.g., 306Clnt. It is limited to 8 characters because the full machine name adds your initials, a 3 character uniqueness suffix and the machine number, and Windows host names cannot exceed 15 characters."
                             },
                             {
                                 "name": "vmCount",
@@ -833,28 +833,27 @@
                                 "toolTip": "Here you can set whether you wish to have the virtual machines auto start at 08:00."
                             },
                             {
-                                "name": "idleVm",
-                                "label": "Shutdown Idle Virtual Machines",
+                                "name": "idleHibernate",
+                                "label": "Hibernate Idle Virtual Machines",
                                 "type": "Microsoft.Common.DropDown",
-                                "defaultValue": "Currently Not in Use",
+                                "defaultValue": "Disabled",
                                 "multiLine": true,
                                 "constraints": {
                                     "allowedValues": [
                                         {
-                                            "label": "Currently Not in Use",
-                                            "description": "",
-                                            "value": "No"
+                                            "label": "Disabled",
+                                            "description": "The virtual machines stay running until they are stopped, by the daily schedule or by hand.",
+                                            "value": "Disabled"
                                         },
                                         {
-                                            "label": "Yes",
-                                            "description": "Auto stop each VM after 15 minutes of inactivity.",
-                                            "value": "Yes"
+                                            "label": "Enabled",
+                                            "description": "Each virtual machine hibernates itself after a period of inactivity. The idle hibernation application is installed on every machine.",
+                                            "value": "Enabled"
                                         }
                                     ],
                                     "required": true
                                 },
-                                "toolTip": "Here you can set whether you wish to have the idle virtual machines auto stop after 15mins of inactivity.",
-                                "visible": false
+                                "toolTip": "Enabled installs the idle hibernation application on every virtual machine and tags them for it, so an unused machine hibernates itself instead of billing for an idle session. The virtual machine size has to support hibernation for this to do anything - see the Virtual Machine Configuration tab."
                             },
                             {
                                 "name": "rdpPublish",
@@ -940,7 +939,7 @@
             "courseStartDate": "[steps('tags').mngTagsConfig.courseDate]",
             "courseEndDay": "[steps('tags').mngTagsConfig.courseEndDay]",
             "startupSchedule": "[steps('tags').mngTagsConfig.schedule]",
-            "idleVm": "[steps('tags').mngTagsConfig.idleVm]",
+            "idleHibernate": "[steps('tags').mngTagsConfig.idleHibernate]",
             "resourceGroupCleanup": "[steps('tags').mngTagsConfig.resourceGroupCleanup]",
             "rdpPublish": "[steps('tags').mngTagsConfig.rdpPublish]"
         }

@@ -10,6 +10,32 @@ over. See `DESIGN.md` for what was merged and why.
 
 # User Interface
 
+## [1.4.0.0] 6.11.2026
+[ui]
+### Change
+  the idle virtual machine dropdown is now visible and configurable. It was hidden, labelled
+  "Currently Not in Use" and offered Yes/No; it is now "Hibernate Idle Virtual Machines",
+  offering Disabled and Enabled, defaulting to Disabled.
+  renamed the control and the output from idleVm to idleHibernate.
+  Updated currentVersion to 1.4.0.0
+### Note
+  the tooltip says the VM size has to support hibernation, because this option does not
+  change hibernationEnabled and cannot make an unsupported size hibernate.
+
+## [1.3.0.0] 6.11.2026
+[ui]
+### Change
+  the VM name box now allows 3 to 8 characters rather than 3 to 10, with the validation
+  message and tooltip saying why. The full machine name is vmName + coach initials + a 3
+  character uniqueness suffix + the machine number, and Windows host names stop at 15
+  characters: 8 + 2 + 3 + 2 = 15 exactly.
+  the placeholder example changed from 306Client, which is 9 characters and would no longer
+  validate, to 306Clnt. Pick a different example if there is a better short form.
+  Updated currentVersion to 1.3.0.0
+### Note
+  this is the coach-facing cost of the DNS collision fix - see main 1.4.0.0. A coach who
+  used the full 10 characters will have to shorten the name.
+
 ## [1.2.0.0] 6.11.2026
 [ui]
 ### Change
@@ -91,6 +117,95 @@ over. See `DESIGN.md` for what was merged and why.
   is chosen.
 
 # Main Template
+
+## [1.7.0.0] 6.11.2026
+[main]
+### Change
+  the VM application is no longer identified by a whole resource id. idleHibernateAppVersionId
+  is replaced by idleHibernateAppName, defaulting to IdleHibernation, and
+  idleHibernateAppVersion, defaulting to latest. windowsVm.json composes the package id from
+  the subscription id it already reads from the routeway Key Vault.
+  Updated contentVersion to 1.7.0.0
+  Updated contentVersion for windowsVm to 1.5.0.0
+### Note
+  this removes the only hardcoded subscription GUID in the folder, added in 1.6.0.0. These
+  templates are served unauthenticated from a public repository, and every other subscription
+  reference comes from the Key Vault. tools/Test-Templates.ps1 check 16 now fails on any
+  literal subscription id in any file.
+  the cost is a constraint: the application has to live in the same gallery and resource group
+  as the course images, because the package id reuses acgRG and galleryImageName. Moving it
+  elsewhere means composing from its own variables.
+
+## [1.6.0.0] 6.11.2026
+[main]
+### Change
+  renamed the idleVM parameter to idleHibernate, with allowed values Enabled and Disabled
+  in place of Yes and No, defaulting to Disabled.
+  renamed the idleVm output to idleHibernate.
+  new parameter idleHibernateAppVersionId, the gallery application version installed when
+  idleHibernate is Enabled. Not on the UI - it is not a coach decision.
+  Updated contentVersion to 1.6.0.0
+  Updated contentVersion for windowsVm to 1.4.0.0
+### Note
+  BREAKING for anything outside this repository. The IdleShutdown tag is now IdleHibernate,
+  its values are Enabled/Disabled rather than Yes/No, and the idleVm output is now
+  idleHibernate. Automation that filters on the old key, the old values or the old output
+  name stops matching the moment this is published. TAGS.md records who reads what.
+  idleHibernateAppVersionId defaults to the IdleHibernation application in the trainingacg
+  gallery, at versions/latest. Setting it to an empty string installs nothing, and check 15
+  warns if the default is ever emptied.
+  two things about that default are worth knowing. The Microsoft documentation for
+  packageReferenceId only ever specifies {version}; "latest" is documented for gallery
+  IMAGE versions, not for application versions, so it is unverified here - the first
+  deployment will say. And the subscription GUID is now written into a template published
+  to a public repository, where every other subscription reference in this folder is read
+  from the routeway Key Vault instead.
+
+## [1.5.0.0] 6.11.2026
+[main]
+### Change
+  every virtual machine now gets a system-assigned managed identity, and the VM Idle Self
+  Hibernate custom role is assigned to that identity on the machine itself - so a machine
+  can hibernate itself when idle and can do nothing else.
+  new parameter idleHibernateRoleDefinitionId, the GUID of that custom role, passed through
+  to windowsVm.json. It is deliberately not on the UI: it is not a coach decision.
+  new output vmPrincipalId, the array of machine identity principal ids, for automation
+  that needs to find them.
+  Updated contentVersion to 1.5.0.0
+  Updated contentVersion for windowsVm to 1.3.0.0
+### Note
+  the default is the role GUID a23c0eed-355e-417d-9759-144c48a84c68, resolved through
+  subscriptionResourceId. Setting the parameter to an empty string skips the assignment,
+  and check 14 warns if the default is ever emptied.
+  the assignment needs Microsoft.Authorization/roleAssignments/write on the resource group,
+  which means Owner or User Access Administrator. A coach without it cannot deploy at all
+  unless the parameter is empty - that is what the empty escape hatch is for.
+  the identity is created either way. Only the role assignment is conditional.
+
+## [1.4.0.0] 6.11.2026
+[main]
+### Change
+  the DNS collision fix now applies to the machine name, not just the public IP DNS label.
+  A VM with no public IP still gets a DNS record, created from its host name, so two courses
+  with the same VM name and coach initials collided there even after the public IP label was
+  fixed. Every machine name now carries a 3 character suffix from
+  uniqueString(resourceGroup().id) - see the four module entries below.
+  vmName gained minLength 3 and maxLength 8, and deliveringCoachInitials minLength and
+  maxLength 2. The 15 character Windows host name limit is only safe if both are bounded,
+  and a template deployed from the CLI does not go through the UI regex.
+  Updated contentVersion to 1.4.0.0
+  Updated contentVersion for windowsVm to 1.2.0.0, networkInterface to 1.2.0.0, publicIP to
+  1.1.0.0 and shutdownSchedule to 1.1.0.0
+### Note
+  the budget is exact: vmName 8 + initials 2 + suffix 3 + machine number 2 = 15. Raising any
+  of the four means lowering another. tools/Test-Templates.ps1 check 13 does that arithmetic
+  from the parameters themselves and fails if it comes to more than 15, and also fails if the
+  UI regex allows a longer name than the template does.
+  the vmNamePrefix output still returns the bare vmName, unchanged, because other automation
+  reads it. It does not reflect the suffix.
+  existing machines are untouched. Redeploying an existing course with the same parameters
+  will now produce differently named machines, because the name itself has changed - it is a
+  new VM, not an update to the old one.
 
 ## [1.3.0.0] 6.11.2026
 [main]
@@ -180,6 +295,67 @@ over. See `DESIGN.md` for what was merged and why.
 
 # Modules
 
+## [1.5.0.0] 6.11.2026
+[windowsVm]
+### Change
+  replaced the idleHibernateAppVersionId parameter with idleHibernateAppName and
+  idleHibernateAppVersion, and added the idleHibernateAppPackageId variable, which composes
+  the package id from parameters('subscriptionId'), variables('acgRG') and
+  variables('galleryImageName') - the same three pieces imageReference is built from.
+  the install gate now tests idleHibernateAppName rather than the old resource id.
+  Updated contentVersion to 1.5.0.0
+### Note
+  reusing acgRG and galleryImageName is the point: the application and the images come from
+  the same gallery, so they stay in step through one variable rather than two. It does mean
+  the application cannot live anywhere else without new variables.
+
+## [1.4.0.0] 6.11.2026
+[windowsVm]
+### Change
+  the IdleShutdown tag is now IdleHibernate, and its value comes from the renamed
+  idleHibernate parameter - Enabled or Disabled rather than Yes or No.
+  new parameter idleHibernateAppVersionId and a new applicationProfile on the virtual
+  machine, which installs that gallery application when idleHibernate is Enabled and the
+  id is not empty. Built with if(...) and json('null'), the same idiom securityProfile
+  and licenseType already use, so the property is absent rather than empty when off.
+  Updated contentVersion to 1.4.0.0
+### Note
+  treatFailureAsDeploymentFailure is false, so a bad application package degrades the
+  course rather than failing the whole deployment. The trade is that a failed install is
+  silent - it shows on the VM extension status, not in the deployment result.
+  order is 1 because there is only one application. It is set explicitly so adding a
+  second one later is an addition rather than a rewrite.
+
+## [1.3.0.0] 6.11.2026
+[windowsVm]
+### Change
+  the virtual machine now declares identity type SystemAssigned.
+  new resource, a copy-looped Microsoft.Authorization/roleAssignments scoped to each
+  machine, granting the VM Idle Self Hibernate role to that machine's own identity. The
+  assignment name is guid(vm resource id, role definition id), so a redeployment of the
+  same machine reuses the same assignment rather than creating a second one.
+  new parameter idleHibernateRoleDefinitionId. Empty skips the assignment.
+  new output vmPrincipalId.
+  Updated contentVersion to 1.3.0.0
+### Note
+  the scope is the single machine, not the resource group, so one machine's identity
+  cannot hibernate another. principalType is ServicePrincipal, which is what a
+  system-assigned identity is, and setting it avoids the replication delay error that
+  comes of Azure not yet seeing a brand new principal.
+
+## [1.2.0.0] 6.11.2026
+[windowsVm]
+### Change
+  vmNamePrefix is now vmName + coach initials + a 3 character nameSuffix taken from
+  uniqueString(resourceGroup().id). This changes the VM name, the OS disk name, the NIC
+  it looks up, every extension name and osProfile.computerName - which is the one that
+  matters, because that is the name DNS registers.
+  Updated contentVersion to 1.2.0.0
+### Note
+  the suffix is derived from the resource group id, so every module computes the same
+  value and the VM still finds its own NIC. Check 13 fails if the four modules that build
+  this prefix ever disagree.
+
 ## [1.1.0.0] 4.11.2026
 [windowsVm]
 ### Add
@@ -235,6 +411,13 @@ over. See `DESIGN.md` for what was merged and why.
   copied unchanged from vmdeployment/modules/network.json 4.0.1.0, with the module repository
   path pointed at deployment/vmdeployment-single/modules.
 
+## [1.2.0.0] 6.11.2026
+[networkInterface]
+### Change
+  vmNamePrefix now carries the 3 character nameSuffix, so the NIC and the public IP it
+  attaches are named in step with the VM. See main 1.4.0.0.
+  Updated contentVersion to 1.2.0.0
+
 ## [1.1.0.0] 6.11.2026
 [networkInterface]
 ### Add
@@ -261,6 +444,19 @@ over. See `DESIGN.md` for what was merged and why.
 ### Note
   RDP remains open to the internet by design.
 
+## [1.1.0.0] 6.11.2026
+[publicIP]
+### Change
+  vmNamePrefix now carries the 3 character nameSuffix, so the public IP is named in step
+  with the VM. See main 1.4.0.0.
+  the separate 4 character dnsSuffix variable is gone, and domainNameLabel no longer
+  appends it. The prefix now carries a suffix from the same uniqueString, so the label
+  had two of them. The DNS label is still unique per resource group; the uniqueness is
+  3 characters rather than 4, from one source instead of two.
+  the parameter reference spelled deliveringCoachinitials, which ARM resolved anyway,
+  now matches the declared name.
+  Updated contentVersion to 1.1.0.0
+
 ## [1.0.0.0] 4.11.2026
 [publicIP]
 ### Add
@@ -271,6 +467,13 @@ over. See `DESIGN.md` for what was merged and why.
 [virtualNetwork]
 ### Add
   copied unchanged from vmdeployment/modules/virtualNetwork.json 4.1.0.0.
+
+## [1.1.0.0] 6.11.2026
+[shutdownSchedule]
+### Change
+  vmNamePrefix now carries the 3 character nameSuffix, so the schedule name and its
+  targetResourceId still point at the VM. See main 1.4.0.0.
+  Updated contentVersion to 1.1.0.0
 
 ## [1.0.0.0] 4.11.2026
 [shutdownSchedule]
