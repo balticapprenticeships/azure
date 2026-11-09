@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.10.0.0",
+    "contentVersion": "1.11.0.0",
     "parameters": {
         "vmPlatform": {
             "type": "string",
@@ -16,7 +16,7 @@
             "type": "bool",
             "defaultValue": false,
             "metadata": {
-                "description": "Enable hibernation on the virtual machines. Available for both platforms. Hibernation has to be set when the VM is created and is only supported on certain VM sizes and OS versions - see README.md. Defaults to false."
+                "description": "Enable hibernation on the virtual machines. Windows client only - Windows Server does not support hibernation while Hyper-V is enabled. The portal hides the box for a server course, and windowsVm.json forces it off for WindowsServer whatever is passed in, so a CLI deployment cannot turn it on either. Hibernation has to be set when the VM is created and is only supported on certain VM sizes - see README.md. Defaults to false."
             }
         },
         "location": {
@@ -677,7 +677,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(parameters('_artifactsLocation'), variables('_moduleRepo'), '/windowsVm.json')]",
-                    "contentVersion": "1.7.0.0"
+                    "contentVersion": "1.8.0.0"
                 },
                 "parameters": {
                     "vmPlatform": {

@@ -10,6 +10,23 @@ over. See `DESIGN.md` for what was merged and why.
 
 # User Interface
 
+## [1.6.0.0] 9.11.2026
+[ui]
+### Change
+  the Enable hibernation checkbox is now shown for Windows client courses only. Windows
+  Server does not support hibernation while Hyper-V is enabled, and the server course
+  images have it enabled.
+  the hibernationEnabled output drops its WindowsServer branch with it, so a server course
+  always sends false rather than whatever the hidden box held.
+  the tooltip says it is a client only option and why.
+  Updated currentVersion to 1.6.0.0
+### Note
+  the size condition is unchanged for clients - the box still appears only on
+  Standard_D2as_v5, Standard_D4as_v5 and Standard_NV4as_v4.
+  Standard_D2as_v5 and Standard_D4as_v5 are still offered as server sizes and still
+  support hibernation as sizes. It is the guest OS that cannot use it, which is why this
+  is gated on the platform and not on the size.
+
 ## [1.5.0.0] 6.11.2026
 [ui]
 ### Change
@@ -134,6 +151,18 @@ over. See `DESIGN.md` for what was merged and why.
   is chosen.
 
 # Main Template
+
+## [1.11.0.0] 9.11.2026
+[main]
+### Change
+  expanded the hibernationEnabled description to say it is Windows client only, that the
+  portal hides it for a server course, and that windowsVm.json forces it off regardless.
+  Updated contentVersion to 1.11.0.0
+  Updated contentVersion for windowsVm to 1.8.0.0
+### Note
+  the parameter is unchanged and still defaults to false. It is not an allowedValues
+  matter - a bool cannot express "false for one platform" - so the enforcement is in
+  windowsVm.json.
 
 ## [1.10.0.0] 9.11.2026
 [main]
@@ -341,6 +370,25 @@ over. See `DESIGN.md` for what was merged and why.
   for both platforms. See DESIGN.md for why that is preferred over two conditional deployments.
 
 # Modules
+
+## [1.8.0.0] 9.11.2026
+[windowsVm]
+### Change
+  additionalCapabilities.hibernationEnabled now also tests vmPlatform, so hibernation is
+  forced off for WindowsServer whatever is passed in. Windows Server does not support
+  hibernation while Hyper-V is enabled.
+  Updated contentVersion to 1.8.0.0
+### Note
+  the UI change in ui.json 1.6.0.0 hides the box, which covers a portal deployment. This
+  covers the deployments that never see the UI. Both are needed and check 20 fails if
+  either goes missing.
+  the hibernationBySize lookup is still inside the true branch of the if, so an
+  unsupported size is still consulted only when hibernation was actually asked for.
+  the Hiberbation tag still reports the REQUESTED value, not the effective one. A server
+  deployment passing hibernationEnabled true from a pipeline would be tagged True while
+  the machine has hibernation off. That was already true when the size did not support it;
+  it is not made worse here and the tag format is deliberately unchanged because other
+  automation may read it.
 
 ## [1.7.0.0] 9.11.2026
 [windowsVm]

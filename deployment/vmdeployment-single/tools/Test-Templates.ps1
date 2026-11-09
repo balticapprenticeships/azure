@@ -49,6 +49,8 @@
          and failed whole deployments.
      19. The extensions are chained one per machine, transitively, and every dependency
          uses its own copy loop so the machines still build in parallel.
+     20. Hibernation is a Windows client option only, in the UI and in the template,
+         because Windows Server does not support it while Hyper-V is enabled.
 
     The original two-template folder has twelve checks. Three of them existed only to detect
     drift between serverMain and desktopMain - the rwkeyVault map agreeing, the outputs
@@ -921,6 +923,78 @@ if ($chainModule) {
             if ($deps | Where-Object { $_ -like "*'$later')]" }) {
                 Add-Failure "modules/windowsVm.json: extension $name depends on $later, which is meant to run after it - that is a cycle or a reversed chain"
             }
+        }
+    }
+}
+
+# ------------------- 20. hibernation is client only, in both places
+# Windows Server does not support hibernation while Hyper-V is enabled, and the course
+# server images have it enabled. Hiding the box in the portal is not enough on its own:
+# a CLI or pipeline deployment never sees the UI, so windowsVm.json has to force it off
+# for WindowsServer as well. Both halves have to say the same thing.
+$hibModule = $jsonFiles | Where-Object { $_.Name -eq 'windowsVm.json' } | Select-Object -First 1
+$hibUi = $jsonFiles | Where-Object { $_.Name -like 'ui*' } | Select-Object -First 1
+
+if ($hibModule) {
+    $hibDoc = Get-Json $hibModule.FullName
+    $hibVm = $hibDoc.resources |
+        Where-Object { $_.type -eq 'Microsoft.Compute/virtualMachines' } | Select-Object -First 1
+    $hibExpr = [string]$hibVm.properties.additionalCapabilities.hibernationEnabled
+
+    if (-not $hibExpr) {
+        Add-Failure "modules/windowsVm.json: the virtual machine has no additionalCapabilities.hibernationEnabled"
+    }
+    else {
+        if ($hibExpr -notmatch "vmPlatform'\)") {
+            Add-Failure "modules/windowsVm.json: additionalCapabilities.hibernationEnabled does not test vmPlatform, so a CLI deployment could enable hibernation on a Windows Server machine, which does not support it while Hyper-V is enabled"
+        }
+        if ($hibExpr -notmatch 'hibernationBySize') {
+            Add-Failure "modules/windowsVm.json: additionalCapabilities.hibernationEnabled no longer consults hibernationBySize, so an unsupported size would be accepted and the deployment would fail in Azure"
+        }
+    }
+}
+
+if ($hibUi) {
+    $hibUiDoc = Get-Json $hibUi.FullName
+    $hibOutput = [string]$hibUiDoc.parameters.outputs.hibernationEnabled
+
+    if (-not $hibOutput) {
+        Add-Failure "$($hibUi.Name): no hibernationEnabled output, so the coach's choice never reaches main.json"
+    }
+    elseif ($hibOutput -match 'WindowsServer') {
+        Add-Failure "$($hibUi.Name): the hibernationEnabled output still names WindowsServer, so a server course could pass hibernation through to the deployment"
+    }
+
+    # The control that feeds that output must be hidden for anything but a client. Slice out
+    # this control only - a search that runs past it finds the NEXT control's visible and
+    # reports on the wrong element.
+    $hibRaw = Get-Content -LiteralPath $hibUi.FullName -Raw
+    $hibSlice = [regex]::Match($hibRaw,
+        '"name"\s*:\s*"hibernationEnabled".*?(?="name"\s*:|\Z)', 'Singleline')
+    $hibControl = [regex]::Match($hibSlice.Value, '"visible"\s*:\s*"([^"]*)"')
+    if (-not $hibControl.Success) {
+        Add-Failure "$($hibUi.Name): the hibernationEnabled control has no visible expression, so it would be shown for a server course too"
+    }
+    else {
+        $visible = $hibControl.Groups[1].Value
+        if ($visible -match 'WindowsServer') {
+            Add-Failure "$($hibUi.Name): the hibernationEnabled control is still shown for WindowsServer, which does not support hibernation while Hyper-V is enabled"
+        }
+        if ($visible -notmatch 'WindowsClient') {
+            Add-Failure "$($hibUi.Name): the hibernationEnabled control visibility does not test for WindowsClient, so it is not gated on the platform at all"
+        }
+        # The box and the output have to agree EXACTLY, or a coach ticks something that is
+        # then discarded. visible is "[<condition>]"; the output wraps the same condition as
+        # "[if(<condition>, steps(...), false)]". A substring test is not enough - a visible
+        # expression that is a prefix of the output's condition would pass while showing the
+        # box on sizes the output rejects.
+        $visibleInner = $visible -replace '^\[', '' -replace '\]$', ''
+        $outputCond = [regex]::Match($hibOutput, '^\[if\((.*), steps\(', 'Singleline')
+        if (-not $outputCond.Success) {
+            Add-Failure "$($hibUi.Name): the hibernationEnabled output is not an if(<condition>, <value>, false), so its condition cannot be compared with the control visibility"
+        }
+        elseif ($outputCond.Groups[1].Value -cne $visibleInner) {
+            Add-Failure "$($hibUi.Name): the hibernationEnabled output condition and the control visibility are not the same expression, so the box can be shown when the value is discarded, or hidden when it is not"
         }
     }
 }
