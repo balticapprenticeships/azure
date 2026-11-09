@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.5.0.0",
+    "contentVersion": "1.7.0.0",
     "parameters": {
         "vmPlatform": {
             "type": "string",
@@ -472,7 +472,10 @@
                 "count": "[parameters('vmCount')]"
             },
             "dependsOn": [
-                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('dscLoop', 1)))]"
+                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('dscLoop', 1)))]",
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', concat(variables('vmNamePrefix'), copyIndex('dscLoop', 1)), 'NvidiaGPUDriver')]",
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', concat(variables('vmNamePrefix'), copyIndex('dscLoop', 1)), 'AMDGpuDriver')]",
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', concat(variables('vmNamePrefix'), copyIndex('dscLoop', 1)), 'GuestAttestation')]"
             ],
             "location": "[parameters('location')]",
             "tags": "[union(variables('commonDscTags'), if(equals(parameters('vmPlatform'), 'WindowsServer'), variables('serverOnlyDscTags'), json('{}')))]",
@@ -500,28 +503,6 @@
             }
         },
         {
-            "name": "[concat(variables('vmNamePrefix'), copyIndex('policyLoop', 1), '/AzurePolicyforWindows')]",
-            "type": "Microsoft.Compute/virtualMachines/extensions",
-            "apiVersion": "[variables('computeApi')]",
-            "copy": {
-                "name": "policyLoop",
-                "count": "[parameters('vmCount')]"
-            },
-            "dependsOn": [
-                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('policyLoop', 1)))]"
-            ],
-            "location": "[parameters('location')]",
-            "properties": {
-                "publisher": "Microsoft.GuestConfiguration",
-                "type": "ConfigurationforWindows",
-                "typeHandlerVersion": "1.0",
-                "autoUpgradeMinorVersion": true,
-                "enableAutomaticUpgrade": true,
-                "settings": {},
-                "protectedSettings": {}
-            }
-        },
-        {
             "name": "[concat(variables('vmNamePrefix'), copyIndex('attestationLoop', 1), '/GuestAttestation')]",
             "type": "Microsoft.Compute/virtualMachines/extensions",
             "apiVersion": "[variables('computeApi')]",
@@ -531,7 +512,9 @@
                 "count": "[parameters('vmCount')]"
             },
             "dependsOn": [
-                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('attestationLoop', 1)))]"
+                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('attestationLoop', 1)))]",
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', concat(variables('vmNamePrefix'), copyIndex('attestationLoop', 1)), 'NvidiaGPUDriver')]",
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', concat(variables('vmNamePrefix'), copyIndex('attestationLoop', 1)), 'AMDGpuDriver')]"
             ],
             "location": "[parameters('location')]",
             "properties": {
@@ -593,7 +576,8 @@
                 "count": "[parameters('vmCount')]"
             },
             "dependsOn": [
-                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('amdDriverLoop', 1)))]"
+                "[resourceId('Microsoft.Compute/virtualMachines', concat(variables('vmNamePrefix'), copyIndex('amdDriverLoop', 1)))]",
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', concat(variables('vmNamePrefix'), copyIndex('amdDriverLoop', 1)), 'NvidiaGPUDriver')]"
             ],
             "location": "[parameters('location')]",
             "properties": {

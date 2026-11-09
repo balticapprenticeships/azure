@@ -41,6 +41,14 @@
          automation reads is still written.
      16. No file hardcodes a subscription id. These templates are published to a public
          repository and every subscription reference comes from the routeway Key Vault.
+     17. The coach email domain is consistent - the UI appends one domain, the text box
+         refuses an address, and the label, placeholder, tooltip and validation message
+         all name the same domain the output appends.
+     18. No Guest Configuration extension is declared. It is deployed by the Azure Policy
+         prerequisites initiative, because installing it here raced the handler upgrade
+         and failed whole deployments.
+     19. The extensions are chained one per machine, transitively, and every dependency
+         uses its own copy loop so the machines still build in parallel.
 
     The original two-template folder has twelve checks. Three of them existed only to detect
     drift between serverMain and desktopMain - the rwkeyVault map agreeing, the outputs
@@ -759,6 +767,161 @@ foreach ($file in $jsonFiles) {
     $hits = [regex]::Matches($raw, '/subscriptions/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
     foreach ($hit in $hits) {
         Add-Failure "$($file.Name): hardcodes a subscription id ($($hit.Value)) - read it from the routeway Key Vault and compose the resource id, the way windowsVm.json builds imageReference and idleHibernateAppPackageId"
+    }
+}
+
+# ------------------- 17. the coach email domain is consistent
+# The UI asks for a name and appends the domain, so the domain exists in two places at
+# once: the output expression and the wording a coach reads. Editing one and not the
+# other produces an address that is wrong in a way nobody notices until the tag is read.
+$uiEmailFile = $jsonFiles | Where-Object { $_.Name -like 'ui*' } | Select-Object -First 1
+if ($uiEmailFile) {
+    $uiEmailDoc = Get-Json $uiEmailFile.FullName
+    $emailOutput = [string]$uiEmailDoc.parameters.outputs.deliveringCoachEmail
+
+    if (-not $emailOutput) {
+        Add-Failure "$($uiEmailFile.Name): no deliveringCoachEmail output, so the coach email never reaches main.json"
+    }
+    elseif ($emailOutput -notmatch 'concat\(') {
+        # the box may refuse an @, in which case something has to add the domain
+        $plainRaw = Get-Content -LiteralPath $uiEmailFile.FullName -Raw
+        $plainControl = [regex]::Match($plainRaw,
+            '"name"\s*:\s*"coachEmail".*?"toolTip"\s*:\s*"[^"]*"', 'Singleline')
+        $plainRegex = [regex]::Match($plainControl.Value, '"regex"\s*:\s*"([^"]*)"')
+        if ($plainRegex.Success -and $plainRegex.Groups[1].Value -notmatch '@') {
+            Add-Failure "$($uiEmailFile.Name): the coachEmail box refuses an @ but the deliveringCoachEmail output appends no domain, so every coach would be tagged with a bare name instead of an email address"
+        }
+    }
+    else {
+        $domainMatch = [regex]::Match($emailOutput, "'(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})'")
+        if (-not $domainMatch.Success) {
+            Add-Failure "$($uiEmailFile.Name): the deliveringCoachEmail output concatenates something that is not a domain literal - a coach would get a malformed address"
+        }
+        else {
+            $domain = $domainMatch.Groups[1].Value
+
+            # find the control the output reads
+            $uiEmailRaw = Get-Content -LiteralPath $uiEmailFile.FullName -Raw
+            $control = [regex]::Match($uiEmailRaw,
+                '"name"\s*:\s*"coachEmail".*?"toolTip"\s*:\s*"[^"]*"', 'Singleline')
+            if (-not $control.Success) {
+                Add-Failure "$($uiEmailFile.Name): the deliveringCoachEmail output appends $domain but there is no coachEmail control to read from"
+            }
+            else {
+                $block = $control.Value
+
+                $regexMatch = [regex]::Match($block, '"regex"\s*:\s*"([^"]*)"')
+                if ($regexMatch.Success -and $regexMatch.Groups[1].Value -match '@') {
+                    Add-Failure "$($uiEmailFile.Name): the coachEmail box accepts an @ but the output appends $domain, so a coach typing their full address would get it twice"
+                }
+
+                $placeholder = [regex]::Match($block, '"placeholder"\s*:\s*"([^"]*)"')
+                if ($placeholder.Success -and $placeholder.Groups[1].Value -match '@') {
+                    Add-Failure "$($uiEmailFile.Name): the coachEmail placeholder shows an address with an @, which tells a coach to type what the box now rejects"
+                }
+
+                # every domain a coach reads has to be the one that gets appended
+                foreach ($m in [regex]::Matches($block, '@[A-Za-z0-9.-]+\.[A-Za-z]{2,}')) {
+                    if ($m.Value -ne $domain) {
+                        Add-Failure "$($uiEmailFile.Name): the coachEmail control names $($m.Value) but the output appends $domain - a coach would be told one domain and tagged with another"
+                    }
+                }
+                if ($block -notmatch [regex]::Escape($domain)) {
+                    Add-Failure "$($uiEmailFile.Name): the coachEmail control never names $domain, so a coach cannot see what is appended to what they type"
+                }
+            }
+        }
+    }
+}
+
+# ------------------- 18. the Guest Configuration extension is not deployed from here
+# Removed 9.11.2026 after it failed a multi machine deployment. The handler upgrade and
+# the install raced each other inside the VM, each unzipping over the other, and one
+# machine failing fails the whole DeployVm. It is now deployed by the built-in initiative
+# "Deploy prerequisites to enable Guest Configuration policies on virtual machines",
+# which also handles the managed identity it requires. Re-adding it here brings the race
+# back, so this fails rather than warns - see README.md before deleting this check.
+foreach ($file in $jsonFiles) {
+    if ($file.Name -like 'ui*') { continue }
+    $gcDoc = Get-Json $file.FullName
+    if (-not $gcDoc -or -not $gcDoc.resources) { continue }
+    foreach ($res in $gcDoc.resources) {
+        if ($res.type -ne 'Microsoft.Compute/virtualMachines/extensions') { continue }
+        if ($res.properties.publisher -eq 'Microsoft.GuestConfiguration') {
+            Add-Failure "$($file.Name): declares a Microsoft.GuestConfiguration extension. It is deployed by the Azure Policy prerequisites initiative instead, because installing it here raced the handler upgrade on the VM and failed whole deployments - see README.md"
+        }
+    }
+}
+
+# ------------------- 19. the extension chain is intact and still per machine
+# The extensions install one at a time on each machine. Two things can quietly break
+# that, and neither shows up until a deployment misbehaves:
+#
+#  - a chain written A -> B -> C severs when B is skipped. ARM removes a skipped
+#    conditional resource from the dependencies rather than inheriting its own, so C
+#    would fall back to depending on the machine alone and run beside A. Three of the
+#    four extensions are conditional, so every extension has to depend on EVERY earlier
+#    one, not just the previous one.
+#  - a dependency that uses another loop's copyIndex chains across machines instead of
+#    within one, which would serialise twenty machines into one queue.
+$extensionOrder = @('NvidiaGPUDriver', 'AMDGpuDriver', 'GuestAttestation', 'Microsoft.PowerShell.DSC')
+
+$chainModule = $jsonFiles | Where-Object { $_.Name -eq 'windowsVm.json' } | Select-Object -First 1
+if ($chainModule) {
+    $chainDoc = Get-Json $chainModule.FullName
+    $extensions = @($chainDoc.resources |
+        Where-Object { $_.type -eq 'Microsoft.Compute/virtualMachines/extensions' })
+
+    $declared = @()
+    foreach ($ext in $extensions) {
+        $declared += ($ext.name -split '/')[-1] -replace "'.*$", ''
+    }
+    foreach ($name in $declared) {
+        if ($extensionOrder -notcontains $name) {
+            Add-Failure "modules/windowsVm.json: extension '$name' is not in the chain order this check knows about - add it to `$extensionOrder in the right position, or it will install beside the others"
+        }
+    }
+
+    foreach ($ext in $extensions) {
+        $name = ($ext.name -split '/')[-1] -replace "'.*$", ''
+        if ($extensionOrder -notcontains $name) { continue }
+        $loop = $ext.copy.name
+        $deps = @($ext.dependsOn)
+
+        # it has to wait for its own machine
+        if (-not ($deps | Where-Object { $_ -match "Microsoft.Compute/virtualMachines'" })) {
+            Add-Failure "modules/windowsVm.json: extension $name does not depend on the virtual machine"
+        }
+
+        # every dependency must be scoped to this resource's own copy loop
+        foreach ($dep in $deps) {
+            $loopsUsed = [regex]::Matches($dep, "copyIndex\('([^']+)'") |
+                ForEach-Object { $_.Groups[1].Value }
+            foreach ($used in $loopsUsed) {
+                if ($used -ne $loop) {
+                    Add-Failure "modules/windowsVm.json: extension $name has a dependency using copyIndex('$used') but its own loop is '$loop' - that chains across machines and would build them one at a time instead of in parallel"
+                }
+            }
+        }
+
+        # and for every extension ahead of it in the order
+        $position = $extensionOrder.IndexOf($name)
+        for ($i = 0; $i -lt $position; $i++) {
+            $earlier = $extensionOrder[$i]
+            if ($declared -notcontains $earlier) { continue }
+            $wanted = "'$earlier')]"
+            if (-not ($deps | Where-Object { $_ -like "*$wanted" })) {
+                Add-Failure "modules/windowsVm.json: extension $name does not depend on $earlier, which runs before it. A chain that only names the previous extension severs when an intermediate one is skipped, and three of these are conditional"
+            }
+        }
+
+        # nothing may wait for something that comes after it
+        for ($i = $position + 1; $i -lt $extensionOrder.Count; $i++) {
+            $later = $extensionOrder[$i]
+            if ($deps | Where-Object { $_ -like "*'$later')]" }) {
+                Add-Failure "modules/windowsVm.json: extension $name depends on $later, which is meant to run after it - that is a cycle or a reversed chain"
+            }
+        }
     }
 }
 

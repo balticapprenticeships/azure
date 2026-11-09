@@ -2,7 +2,7 @@
     "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
     "handler": "Microsoft.Azure.CreateUIDef",
     "version": "0.1.2-preview",
-    "currentVersion": "1.4.0.0",
+    "currentVersion": "1.5.0.0",
     "parameters": {
         "config": {
             "isWizard": true
@@ -717,15 +717,15 @@
                             },
                             {
                                 "name": "coachEmail",
-                                "label": "Delivering Coach Email",
+                                "label": "Delivering Coach Email (@balticapprenticeships.com is added for you)",
                                 "type": "Microsoft.Common.TextBox",
-                                "placeholder": "Delivering Coach Email e.g., joe.bloggs@balticapprenticeships.com",
+                                "placeholder": "e.g., joe.bloggs",
                                 "constraints": {
-                                    "regex": "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$",
+                                    "regex": "^[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*$",
                                     "required": true,
-                                    "validationMessage": "Please enter a valid email address."
+                                    "validationMessage": "Enter only the name part of the address, for example joe.bloggs. The @balticapprenticeships.com domain is added automatically, so do not type an @ or a domain."
                                 },
-                                "toolTip": "Here you can enter the email address for the delivering coach."
+                                "toolTip": "Enter only the part of your email address before the @, for example joe.bloggs. @balticapprenticeships.com is appended for you, so the tag ends up as joe.bloggs@balticapprenticeships.com. If your address is on a different domain, this box cannot express it - say so rather than working around it."
                             },
                             {
                                 "name": "routeway",
@@ -934,7 +934,7 @@
             "subnetName": "[steps('netConfig').nicConfig.subnetName]",
             "createdBy": "[steps('tags').mngTagsConfig.createdBy]",
             "deliveringCoachInitials": "[steps('tags').mngTagsConfig.coachInitials]",
-            "deliveringCoachEmail": "[steps('tags').mngTagsConfig.coachEmail]",
+            "deliveringCoachEmail": "[concat(steps('tags').mngTagsConfig.coachEmail, '@balticapprenticeships.com')]",
             "routeway": "[steps('tags').mngTagsConfig.routeway]",
             "courseStartDate": "[steps('tags').mngTagsConfig.courseDate]",
             "courseEndDay": "[steps('tags').mngTagsConfig.courseEndDay]",

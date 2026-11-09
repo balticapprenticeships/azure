@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.7.0.0",
+    "contentVersion": "1.10.0.0",
     "parameters": {
         "vmPlatform": {
             "type": "string",
@@ -292,7 +292,7 @@
         "deliveringCoachEmail": {
             "type": "string",
             "metadata": {
-                "description": "Please provide the email address of the delivering coach."
+                "description": "Full email address of the delivering coach, for example joe.bloggs@balticapprenticeships.com. The portal asks only for the name part and appends @balticapprenticeships.com in ui.json, so a portal deployment always sends a whole address. A CLI deployment has to send the whole address itself - nothing here appends the domain, and a bare name would become a broken CoachEmail tag."
             }
         },
         "routeway": {
@@ -677,7 +677,7 @@
                 "mode": "Incremental",
                 "templateLink": {
                     "uri": "[concat(parameters('_artifactsLocation'), variables('_moduleRepo'), '/windowsVm.json')]",
-                    "contentVersion": "1.5.0.0"
+                    "contentVersion": "1.7.0.0"
                 },
                 "parameters": {
                     "vmPlatform": {

@@ -10,6 +10,23 @@ over. See `DESIGN.md` for what was merged and why.
 
 # User Interface
 
+## [1.5.0.0] 6.11.2026
+[ui]
+### Change
+  the Delivering Coach Email box now asks for the name part only, for example joe.bloggs,
+  and the deliveringCoachEmail output appends @balticapprenticeships.com. The label says so, and the
+  placeholder is "e.g., joe.bloggs" rather than a whole address.
+  the regex changed from an email pattern to ^[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*$, which
+  accepts joe.bloggs, joe-bloggs and joe.bloggs2 and refuses an @ or a domain. A coach who
+  pastes their whole address gets a validation message telling them to drop the domain.
+  Updated currentVersion to 1.5.0.0
+### Note
+  this hardcodes one domain into the UI. A coach on any other domain cannot be expressed
+  through the portal at all now, where before the box took any valid address. Nothing in
+  the repository suggested there is such a coach, but the box no longer allows for one.
+  CreateUIDef has no variables, so the domain lives in two places: the output expression
+  and the wording a coach reads. Check 17 fails if they disagree.
+
 ## [1.4.0.0] 6.11.2026
 [ui]
 ### Change
@@ -117,6 +134,36 @@ over. See `DESIGN.md` for what was merged and why.
   is chosen.
 
 # Main Template
+
+## [1.10.0.0] 9.11.2026
+[main]
+### Change
+  Updated contentVersion to 1.10.0.0
+  Updated contentVersion for windowsVm to 1.7.0.0
+### Note
+  no parameters changed. The extensions on each machine are now installed one at a time -
+  see the windowsVm entry.
+
+## [1.9.0.0] 9.11.2026
+[main]
+### Change
+  Updated contentVersion to 1.9.0.0
+  Updated contentVersion for windowsVm to 1.6.0.0
+### Note
+  no parameters changed. The AzurePolicyforWindows extension is gone from windowsVm.json -
+  see that entry. Nothing in main.json referenced it.
+
+## [1.8.0.0] 6.11.2026
+[main]
+### Change
+  expanded the deliveringCoachEmail description to say that the portal sends a whole
+  address composed in ui.json, and that a CLI deployment has to send the whole address
+  itself - nothing in main.json appends a domain.
+  Updated contentVersion to 1.8.0.0
+### Note
+  the parameter is unchanged. It still takes, and still has to be given, a full email
+  address. A CLI deployment passing a bare joe.bloggs would produce a broken CoachEmail
+  tag, and ARM cannot pattern-match a string parameter to prevent it.
 
 ## [1.7.0.0] 6.11.2026
 [main]
@@ -294,6 +341,64 @@ over. See `DESIGN.md` for what was merged and why.
   for both platforms. See DESIGN.md for why that is preferred over two conditional deployments.
 
 # Modules
+
+## [1.7.0.0] 9.11.2026
+[windowsVm]
+### Change
+  the four extensions are now chained so they install one at a time on each machine, in
+  the order NvidiaGPUDriver, AMDGpuDriver, GuestAttestation, Microsoft.PowerShell.DSC.
+  Before this they all depended only on the virtual machine, so up to three ran at once.
+  Updated contentVersion to 1.7.0.0
+### Note
+  pre-emptive, not a fix for a seen failure. The AzurePolicyforWindows failure on 9.11.2026
+  was one extension racing itself during a handler upgrade, which chaining would not have
+  prevented. This reduces contention on a machine that was running three installs at once.
+  EVERY extension depends on EVERY earlier extension, not just the previous one. This is
+  deliberate and the naive version is broken: ARM removes a skipped conditional resource
+  from the dependencies rather than passing on its own, so A -> B -> C severs when B is
+  skipped and C falls back to depending on the machine alone. Three of these four are
+  conditional, so a single chain would come apart in the ordinary case.
+  every dependency uses its own copy loop index, so the chain is within one machine. If it
+  used another loop index the machines would build one after another instead of together,
+  turning a 20 machine deployment into 80 sequential installs.
+  the common case is unchanged. On a server or a non GPU client with attestation off, all
+  three of the DSC extension dependencies are removed and it waits only for the machine,
+  exactly as before.
+  the order puts the GPU drivers first because a driver install can restart the machine,
+  and a restart part way through DSC is the worst of the four failure modes. The two
+  drivers are mutually exclusive by VM size, so at most one of them ever runs. Note that
+  the restart behaviour of install-nvidia-drivers.ps1 has not been verified - the ordering
+  is the cautious choice, not a measured one.
+  check 19 fails if the chain is severed, reversed, scoped to the wrong loop, or if an
+  extension is added that the chain order does not mention.
+
+## [1.6.0.0] 9.11.2026
+[windowsVm]
+### Change
+  removed the AzurePolicyforWindows extension (Microsoft.GuestConfiguration /
+  ConfigurationforWindows) and its policyLoop copy loop.
+  Updated contentVersion to 1.6.0.0
+### Note
+  it failed a multi machine deployment on 9.11.2026 and took the whole DeployVm with it.
+  The cause is in the handler, not here: the VM logs show the handler being upgraded from
+  1.29.116.0 to 1.29.123.0 at the same moment the extension was being installed, so two
+  enable processes unzipped GC.zip into the same directory. One deleted the binaries while
+  the other was mid-unzip, and both then failed to Import-Module GCService.psm1. The
+  handler takes its own lock after the unzip, not before, so nothing stopped it.
+  it appeared when deploying several machines because each machine runs its own race and
+  one failure fails the deployment - not because the machines interact. 1.29.116.0 looks
+  to be baked into the gallery image, so every machine upgrades on first boot and every
+  machine is exposed.
+  the replacement is the built-in initiative "Deploy prerequisites to enable Guest
+  Configuration policies on virtual machines", which is what Microsoft documents for
+  deploying this at scale. It installs the extension and the system-assigned managed
+  identity the extension requires, outside the coach deployment, so a flaky extension can
+  no longer fail a course build. ASSIGNING THAT INITIATIVE IS A SEPARATE AZURE CHANGE AND
+  IS NOT DONE BY THIS TEMPLATE.
+  nothing is lost in the meantime. The extension needs guest configuration assignments to
+  do anything, and it needs a managed identity, which these machines only gained in
+  1.5.0.0. It has been an idle agent for as long as it has been here.
+  check 18 fails if a Microsoft.GuestConfiguration extension is declared again.
 
 ## [1.5.0.0] 6.11.2026
 [windowsVm]
