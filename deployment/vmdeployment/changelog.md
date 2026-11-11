@@ -13,6 +13,23 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 # Windows Server User Interface
 
+## [4.1.3.3] 11.11.2026
+[uiSvrDefinition]
+### Change
+  changed weekly cleanup otion visibility to false
+
+## [4.0.2.1] 4.11.2026
+[serverMain]
+### Add
+  changed patchmode to Manual for Windows
+  Updated contentVersion for windowsServer module to 4.0.2.0
+
+## [4.1.3.2] 4.11.2026
+[uiSvrDefinition]
+### Change
+  fixed rdpPublish tag label error (testing only)
+  Updated contentVersion to 4.1.3.2
+
 ## [4.1.3.0] 4.11.2026
 [uiSvrDefinition]
 ### Change
@@ -21,7 +38,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [4.0.2.0] 4.11.2026
 [serverMain]
-### SS
+### Add
   Added rdpPublish tag
   Updated contentVersion for windowsServer module to 4.0.2.0
 
@@ -52,6 +69,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 
 # Windows Client User Interface
+
+## [4.5.1.1] 11.11.2026
+[uiWcDefinition]
+### Change
+  changed weekly cleanup option visibility to false
+
 ## [4.5.0.0] 13.10.2026
 [uiWcDefinition]
 ### Change
