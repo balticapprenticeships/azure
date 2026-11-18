@@ -51,6 +51,8 @@
          uses its own copy loop so the machines still build in parallel.
      20. Hibernation is a Windows client option only, in the UI and in the template,
          because Windows Server does not support it while Hyper-V is enabled.
+     21. No auto-shutdown schedule is declared. Azure Policy creates it, and both
+         creating the same schedule is what made deployments fail.
 
     The original two-template folder has twelve checks. Three of them existed only to detect
     drift between serverMain and desktopMain - the rwkeyVault map agreeing, the outputs
@@ -995,6 +997,26 @@ if ($hibUi) {
         }
         elseif ($outputCond.Groups[1].Value -cne $visibleInner) {
             Add-Failure "$($hibUi.Name): the hibernationEnabled output condition and the control visibility are not the same expression, so the box can be shown when the value is discarded, or hidden when it is not"
+        }
+    }
+}
+
+# ------------------- 21. the auto-shutdown schedule is not created from here
+# Removed 17.11.2026. A deployIfNotExists policy in the subscription creates
+# shutdown-computevm-<vm> for every new machine, and this template created a schedule of
+# exactly the same name at the same moment. The activity log showed two writes 0.3s apart,
+# one succeeding and one failing with ConcurrentUpdate, which failed the whole deployment.
+# The race is per machine, so a 20 machine course had twenty chances to hit it.
+foreach ($file in $jsonFiles) {
+    if ($file.Name -like 'ui*') { continue }
+    $schedDoc = Get-Json $file.FullName
+    if (-not $schedDoc -or -not $schedDoc.resources) { continue }
+    foreach ($res in $schedDoc.resources) {
+        if ($res.type -like 'Microsoft.DevTestLab/schedules*') {
+            Add-Failure "$($file.Name): declares a Microsoft.DevTestLab/schedules resource. Azure Policy already creates shutdown-computevm-<vm> for every machine, and both creating it races and fails deployments - see README.md"
+        }
+        if ($res.type -eq 'Microsoft.Resources/deployments' -and $res.properties.templateLink.uri -like '*shutdownSchedule.json*') {
+            Add-Failure "$($file.Name): links the shutdownSchedule module, which was removed because Azure Policy creates the schedule - see README.md"
         }
     }
 }

@@ -152,6 +152,35 @@ over. See `DESIGN.md` for what was merged and why.
 
 # Main Template
 
+## [1.12.0.0] 17.11.2026
+[main]
+### Change
+  removed the DeployShutdownSchedule deployment, and deleted modules/shutdownSchedule.json.
+  The auto-shutdown schedule is created by an Azure Policy deployIfNotExists in the
+  subscription instead.
+  Updated contentVersion to 1.12.0.0
+### Note
+  a Windows 11 deployment failed on 17.11.2026 with ConcurrentUpdate. The activity log
+  showed TWO writes to shutdown-computevm-HIBTSTCLXH41 0.3 seconds apart - one succeeded at
+  15:49:25.356 and the other failed at 15:49:25.404. PolicyDeployment_6622003084534873692
+  ran from 15:49:23.206 to 15:49:25.570 and its output resource was that same schedule, so
+  the policy and this template were creating the same resource at the same moment.
+  the race is per machine, so a 20 machine course had twenty chances to hit it. This was
+  not a copy loop problem and serialising the loop would not have helped.
+  the shutdown time now comes from the policy rather than from here. The policy parameters
+  were checked on 17.11.2026 and are identical to what this module set: time 1700,
+  timeZoneId GMT Standard Time, enableNotification Disabled. So nothing changes for a
+  course today. What has changed is ownership - if that policy is ever reconfigured,
+  every course moves with it and nothing in this repository will say so.
+  the tags this module wrote - Displayname, Dept, CreatedBy, CourseDate, CourseEndDay,
+  Cleanup - are gone from the schedule. They are not needed: cleanup is resource group
+  level, so the schedule goes when the group goes. Note that Microsoft does NOT document
+  the schedule being deleted with the VM - the deleteOption mechanism covers only OS disks,
+  data disks, NICs and public IPs - so a machine deleted on its own leaves its schedule
+  behind until the resource group is removed.
+  check 21 fails if a Microsoft.DevTestLab/schedules resource or a link to the
+  shutdownSchedule module comes back.
+
 ## [1.11.0.0] 9.11.2026
 [main]
 ### Change
@@ -620,6 +649,14 @@ over. See `DESIGN.md` for what was merged and why.
 [virtualNetwork]
 ### Add
   copied unchanged from vmdeployment/modules/virtualNetwork.json 4.1.0.0.
+
+## [REMOVED] 17.11.2026
+[shutdownSchedule]
+### Change
+  the module is deleted. Azure Policy creates the auto-shutdown schedule. See main
+  1.12.0.0 for the evidence and the consequences.
+### Note
+  it last shipped at 1.1.0.0. The entries below are kept as the record of what it did.
 
 ## [1.1.0.0] 6.11.2026
 [shutdownSchedule]

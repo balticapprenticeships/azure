@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.11.0.0",
+    "contentVersion": "1.12.0.0",
     "parameters": {
         "vmPlatform": {
             "type": "string",
@@ -822,47 +822,6 @@
             },
             "dependsOn": [
                 "[resourceId('Microsoft.Resources/deployments', 'DeployNetworkInterface')]"
-            ]
-        },
-        {
-            "name": "DeployShutdownSchedule",
-            "type": "Microsoft.Resources/deployments",
-            "apiVersion": "[variables('deploymentsApi')]",
-            "properties": {
-                "mode": "Incremental",
-                "templateLink": {
-                    "uri": "[concat(parameters('_artifactsLocation'), variables('_moduleRepo'), '/shutdownSchedule.json')]",
-                    "contentVersion": "1.1.0.0"
-                },
-                "parameters": {
-                    "location": {
-                        "value": "[parameters('location')]"
-                    },
-                    "vmName": {
-                        "value": "[parameters('vmName')]"
-                    },
-                    "vmCount": {
-                        "value": "[parameters('vmCount')]"
-                    },
-                    "deliveringCoachInitials": {
-                        "value": "[parameters('deliveringCoachInitials')]"
-                    },
-                    "createdBy": {
-                        "value": "[parameters('createdBy')]"
-                    },
-                    "courseStartDate": {
-                        "value": "[parameters('courseStartDate')]"
-                    },
-                    "courseEndDay": {
-                        "value": "[parameters('courseEndDay')]"
-                    },
-                    "resourceGroupCleanup": {
-                        "value": "[parameters('resourceGroupCleanup')]"
-                    }
-                }
-            },
-            "dependsOn": [
-                "[resourceId('Microsoft.Resources/deployments', 'DeployVm')]"
             ]
         }
     ],
