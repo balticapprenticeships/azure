@@ -152,6 +152,104 @@ over. See `DESIGN.md` for what was merged and why.
 
 # Main Template
 
+## [policy] 25.11.2026
+[policy/idleHibernateRoleAssignment]
+### Added
+  policy/idleHibernateRoleAssignment.portal.json - the same policy in the shape the portal's
+  Policy rule editor expects: mode, policyRule and parameters in one object, to paste whole.
+  policy/README.md now has a portal walkthrough alongside the az commands, screen by screen,
+  including what the compliance results should look like before the effect is switched to
+  DeployIfNotExists and how to confirm the assignment landed on the machine and not the
+  resource group.
+  check 22 in tools/Test-Templates.ps1 - the three files in policy/ must agree, the rule must
+  keep its roleDefinitionIds, and the if condition must keep testing the IdleHibernate tag and
+  the system-assigned identity.
+### Note
+  THE PORTAL ROUTE IS THE PREFERRED ONE and the README now says so. The portal grants the
+  remediation identity its role automatically when the assignment is created; the CLI does not,
+  and a remediation with no permission fails. Quoting the docs: "When you use the portal, Azure
+  Policy automatically grants the managed identity the listed roles once assignment starts.
+  When you use an Azure software development kit (SDK), the roles must manually be granted."
+  that automatic grant does NOT repeat if roleDefinitionIds is edited later, even in the
+  portal. Recorded in policy/README.md.
+  the portal file is generated, not hand-written. Check 22 exists because a mismatch between
+  the two routes fails silently - whichever file was not updated still deploys cleanly and just
+  does the wrong thing.
+  mode is Indexed, not All. Indexed is what evaluates tagged resources; All would bring
+  resource groups into scope.
+
+## [policy] 25.11.2026
+[policy/idleHibernateRoleAssignment]
+### Added
+  policy/idleHibernateRoleAssignment.rules.json and .params.json - a subscription-scope
+  deployIfNotExists policy that assigns the VM Idle Self Hibernate role to each machine's own
+  system-assigned identity, scoped to that one machine, after the machine is built.
+  policy/README.md - why it exists, what it does, and the deployment commands.
+### Note
+  THESE FILES ARE NOT PART OF THE DEPLOYMENT. main.json never touches them. They are a one-off
+  by an admin with Owner or User Access Administrator, at subscription scope.
+  this is the answer to 1.13.0.0. The policy assignment's managed identity holds
+  roleAssignments/write, so coaches never need it. The trigger is the IdleHibernate=Enabled tag
+  and the scope is the single machine, so the least privilege the template had is preserved.
+  roleDefinitionIds names Role Based Access Control Administrator, not User Access
+  Administrator - roleAssignments/write plus */read, constrainable by role, and the */read is
+  what lets the deployment read the machine's identity.principalId.
+  evaluationDelay is AfterProvisioningSuccess. The identity does not exist until the VM write
+  succeeds.
+  idleHibernateRoleDefinitionId STAYS EMPTY in main.json and must stay empty while the policy
+  is enforced. The template and the policy derive the assignment name differently, so both
+  running would attempt two differently-named assignments with the same role, principal and
+  scope, and the second fails with RoleAssignmentExists.
+### Outstanding
+  the coach role needs Microsoft.Authorization/roleAssignments/read added. Without it the
+  deployment still succeeds, but the policy evaluation of the coach's own request cannot read
+  the existing assignment. It is a read action only.
+  the existence check reads the Microsoft.Authorization/roleAssignments/scope alias, which has
+  NOT been verified against this subscription - there was no logged-in session to check it.
+  policy/README.md carries the az command to confirm it and what to do if it is missing. The
+  failure mode is a machine permanently reported non-compliant with the assignment re-created
+  identically each cycle, not an over-grant.
+
+## [1.14.0.0] 25.11.2026
+[main]
+### Change
+  idleHibernateAppName defaults to IdleHibernation again. The coach role was granted
+  Microsoft.Compute/galleries/applications/read and galleries/applications/versions/read
+  on 25.11.2026, which was the LinkedAuthorizationFailed in 1.13.0.0.
+  Updated contentVersion to 1.14.0.0
+### Note
+  idleHibernateRoleDefinitionId is STILL EMPTY. Those two gallery actions are read-only and
+  safe to grant; Microsoft.Authorization/roleAssignments/write is not, because it would let
+  a coach assign any role they can see at that scope, including to themselves. The role
+  assignment therefore has to be made by something already privileged - see README.md for
+  the options.
+  so a machine built today gets the identity and the application but no permission to
+  hibernate itself. The application will install and then fail to act. That is the current
+  state and it is deliberate, not an oversight.
+
+## [1.13.0.0] 24.11.2026
+[main]
+### Change
+  idleHibernateRoleDefinitionId and idleHibernateAppName both default to an empty string
+  again. Coaches could not deploy at all.
+  Updated contentVersion to 1.13.0.0
+### Note
+  the coach role has no Microsoft.Authorization/roleAssignments/write - it is in neither
+  actions nor notActions - so the role assignment failed PRE-FLIGHT VALIDATION with
+  InvalidTemplateDeployment and nothing was created. That gate does not depend on any coach
+  choice, so it broke every deployment, not just ones using idle hibernation.
+  the coach role grants Microsoft.Compute/galleries/images/versions/read but has no entry
+  for galleries/applications, so the VM application failed the VM write with
+  LinkedAuthorizationFailed. That one only bit coaches who chose idleHibernate Enabled.
+  this is a regression introduced by this folder. Both parameters were designed with an
+  empty default as the fallback for exactly this case, and then given live defaults in
+  1.5.0.0 and 1.7.0.0, which armed them for every coach. The feature was only ever
+  exercised by a principal with Owner, which is why it passed testing.
+  checks 14 and 15 warn about the empty defaults. Those warnings are now correct and
+  should stay until the permissions question is settled.
+  nothing else changed. The system-assigned identity stays - it needs no extra rights and
+  the guest configuration assignments use it.
+
 ## [1.12.0.0] 17.11.2026
 [main]
 ### Change

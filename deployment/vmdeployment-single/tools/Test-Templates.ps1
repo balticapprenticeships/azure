@@ -53,6 +53,9 @@
          because Windows Server does not support it while Hyper-V is enabled.
      21. No auto-shutdown schedule is declared. Azure Policy creates it, and both
          creating the same schedule is what made deployments fail.
+     22. The three files in policy/ agree. The portal file is the rules and the params in
+         one object, so a fix applied to one route and not the other is caught here
+         rather than by a machine that never gets its role.
 
     The original two-template folder has twelve checks. Three of them existed only to detect
     drift between serverMain and desktopMain - the rwkeyVault map agreeing, the outputs
@@ -645,7 +648,7 @@ if ($vmModule) {
             Add-Failure "main.json: DeployVm does not pass idleHibernateRoleDefinitionId to windowsVm.json, so no role is ever assigned"
         }
         if (-not $mainForIdentity.parameters.idleHibernateRoleDefinitionId.defaultValue) {
-            Add-Warning "main.json: idleHibernateRoleDefinitionId has an empty default, so a portal deployment builds the machines with an identity but no self-hibernate role - paste the custom role GUID as the default"
+            Add-Warning "main.json: idleHibernateRoleDefinitionId has an empty default, so this template creates no role assignment. That is correct as of 25.11.2026 - the coach role has no roleAssignments/write, and the role is assigned by the deployIfNotExists policy in policy/ instead. It must STAY empty while that policy is enforced, or the two collide with RoleAssignmentExists. See policy/README.md"
         }
     }
 }
@@ -725,7 +728,7 @@ if ($vmModule -and $mainForIdle) {
             }
         }
         if (-not $mainForIdle.parameters.idleHibernateAppName.defaultValue) {
-            Add-Warning "main.json: idleHibernateAppName has an empty default, so picking Enabled tags the machines for idle hibernation without installing the application that performs it"
+            Add-Warning "main.json: idleHibernateAppName has an empty default, so picking Enabled tags the machines without installing the application that performs it. This is deliberate as of 24.11.2026: the coach role cannot read galleries/applications. Set it back to IdleHibernation once that read action is granted"
         }
     }
     elseif ($vmIdleDoc.parameters.idleHibernateAppName) {
@@ -1021,6 +1024,70 @@ foreach ($file in $jsonFiles) {
     }
 }
 
+
+# ------------------- 22. the policy folder does not drift between its two routes
+# Added 25.11.2026. policy/ is not deployed by main.json, so nothing else here looks at it.
+# The portal needs mode, policyRule and parameters in one object; the CLI needs the rule and
+# the parameters as separate files. Three files, one meaning - and the failure mode of a
+# mismatch is silent, because whichever route was not updated still deploys happily and
+# simply does the wrong thing.
+$policyDir = Join-Path $root 'policy'
+if (Test-Path -LiteralPath $policyDir) {
+    $rulesPath  = Join-Path $policyDir 'idleHibernateRoleAssignment.rules.json'
+    $paramsPath = Join-Path $policyDir 'idleHibernateRoleAssignment.params.json'
+    $portalPath = Join-Path $policyDir 'idleHibernateRoleAssignment.portal.json'
+
+    foreach ($needed in @($rulesPath, $paramsPath, $portalPath)) {
+        if (-not (Test-Path -LiteralPath $needed)) {
+            Add-Failure "policy/$(Split-Path -Leaf $needed) is missing. The folder holds the rule, the parameters and the paste-ready portal object, and the portal one is generated from the other two - see policy/README.md"
+        }
+    }
+
+    if ((Test-Path -LiteralPath $rulesPath) -and (Test-Path -LiteralPath $paramsPath) -and (Test-Path -LiteralPath $portalPath)) {
+        try {
+            $polRules  = Get-Content -LiteralPath $rulesPath  -Raw | ConvertFrom-Json
+            $polParams = Get-Content -LiteralPath $paramsPath -Raw | ConvertFrom-Json
+            $polPortal = Get-Content -LiteralPath $portalPath -Raw | ConvertFrom-Json
+        } catch {
+            Add-Failure "policy/: one of the three files does not parse as JSON - $($_.Exception.Message)"
+            $polPortal = $null
+        }
+
+        if ($polPortal) {
+            if (-not $polPortal.mode) {
+                Add-Failure 'policy/idleHibernateRoleAssignment.portal.json: no mode. The portal editor needs mode, policyRule and parameters in one object'
+            }
+            elseif ($polPortal.mode -cne 'Indexed') {
+                Add-Failure "policy/idleHibernateRoleAssignment.portal.json: mode is '$($polPortal.mode)', not Indexed. Indexed is what evaluates tagged resources - All would evaluate resource groups too"
+            }
+
+            $norm = { param($o) if ($null -eq $o) { '' } else { ($o | ConvertTo-Json -Depth 40 -Compress) } }
+
+            if ((& $norm $polPortal.policyRule) -cne (& $norm $polRules)) {
+                Add-Failure 'policy/idleHibernateRoleAssignment.portal.json: its policyRule is not the same as idleHibernateRoleAssignment.rules.json. One route was edited and the other was not, so the portal and the CLI would deploy different policies - regenerate the portal file from the other two'
+            }
+
+            if ((& $norm $polPortal.parameters) -cne (& $norm $polParams)) {
+                Add-Failure 'policy/idleHibernateRoleAssignment.portal.json: its parameters are not the same as idleHibernateRoleAssignment.params.json - regenerate the portal file from the other two'
+            }
+
+            # The remediation identity has to be told what it may do, or the deployment fails.
+            if (-not $polRules.then.details.roleDefinitionIds) {
+                Add-Failure 'policy/idleHibernateRoleAssignment.rules.json: no roleDefinitionIds, so the remediation identity gets no permission and every deployIfNotExists deployment fails'
+            }
+
+            # The tag is the whole trigger. Without it the policy would assign the role to every
+            # machine in the subscription, including ones that are nothing to do with the labs.
+            $ifText = $polRules.if | ConvertTo-Json -Depth 40 -Compress
+            if ($ifText -notmatch 'IdleHibernate') {
+                Add-Failure 'policy/idleHibernateRoleAssignment.rules.json: the if condition no longer tests the IdleHibernate tag, so the policy would assign the self-hibernate role to every virtual machine in scope'
+            }
+            if ($ifText -notmatch 'SystemAssigned') {
+                Add-Failure 'policy/idleHibernateRoleAssignment.rules.json: the if condition no longer tests for a system-assigned identity, so the deployment would run against machines that have no principal to assign the role to'
+            }
+        }
+    }
+}
 # ----------------------------------------------------------------------- report
 Write-Host ''
 if ($warnings.Count -gt 0) {

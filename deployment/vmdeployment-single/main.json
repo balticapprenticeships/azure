@@ -1,6 +1,6 @@
 {
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-    "contentVersion": "1.12.0.0",
+    "contentVersion": "1.14.0.0",
     "parameters": {
         "vmPlatform": {
             "type": "string",
@@ -339,7 +339,7 @@
             "type": "string",
             "defaultValue": "IdleHibernation",
             "metadata": {
-                "description": "Name of the gallery application installed when idleHibernate is Enabled. The UI does not ask for it - it is not a coach decision. It has to live in the same gallery as the course images, because windowsVm.json composes the package id from the subscription id read from the routeway Key Vault. Set it to an empty string to install nothing."
+                "description": "Name of the gallery application installed when idleHibernate is Enabled. The UI does not ask for it - it is not a coach decision. It needs Microsoft.Compute/galleries/applications/read and galleries/applications/versions/read on the coach role, which were added 25.11.2026 after a LinkedAuthorizationFailed; without them any non-empty value fails the VM write for a coach who chooses Enabled. It has to live in the same gallery as the course images, because windowsVm.json composes the package id from the subscription id read from the routeway Key Vault. Set it to an empty string to install nothing. See README.md."
             }
         },
         "idleHibernateAppVersion": {
@@ -351,9 +351,9 @@
         },
         "idleHibernateRoleDefinitionId": {
             "type": "string",
-            "defaultValue": "a23c0eed-355e-417d-9759-144c48a84c68",
+            "defaultValue": "",
             "metadata": {
-                "description": "GUID of the VM Idle Self Hibernate custom role, assigned to each machine's own system-assigned managed identity on the machine itself so it can hibernate when idle. The UI does not ask for it - it is not a coach decision. Set it to an empty string to build the machines with an identity but no role assignment, which is the fallback when the deploying principal has no rights to create role assignments."
+                "description": "GUID of the VM Idle Self Hibernate custom role, assigned to each machine's own system-assigned managed identity on the machine itself so it can hibernate when idle. DEFAULTS TO EMPTY ON PURPOSE - the coach role has no Microsoft.Authorization/roleAssignments/write, so any non-empty value fails every coach deployment at pre-flight validation before anything is created. Set it only for a deployment run by a principal that can create role assignments. The GUID is a23c0eed-355e-417d-9759-144c48a84c68. See README.md."
             }
         },
         "rdpPublish": {
